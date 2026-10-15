@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
 from .config_manager import SSHConfig
+from .git_manager import GitIdentity, GitPlan
 from .manager import Change, Manager
 from .utils import GhsshError, Transaction, atomic_write, locked, read_bytes
 
@@ -19,6 +21,7 @@ class SwitchPlan:
     new_config: str
     fingerprint: str | None
     old_fingerprint: str | None
+    git_identity: GitPlan | None = None
 
 
 @dataclass(frozen=True)
@@ -30,10 +33,11 @@ class Session:
     fingerprint: str
     backup: Path
     config_existed: bool
+    git_identity: GitIdentity | None = None
 
 
 class SwitchManager:
-    """Switch only config; keep agent identities and all pre-existing key files unchanged."""
+    """Temporarily select SSH and optional repository commit identities."""
 
     def __init__(self, manager: Manager):
         self.manager = manager
@@ -45,8 +49,17 @@ class SwitchManager:
             return None
         try:
             data = json.loads(read_bytes(path))
-            if not isinstance(data, dict) or data.get("version") != 1:
+            if not isinstance(data, dict) or data.get("version") not in (1, 2):
                 raise ValueError("unsupported switch state")
+            git_identity = (
+                GitIdentity.parse(data["git_identity"])
+                if data.get("git_identity") is not None
+                else None
+            )
+            if data["version"] == 1 and git_identity is not None:
+                raise ValueError("legacy switch state cannot contain a Git identity")
+            if data["version"] == 2 and git_identity is None:
+                raise ValueError("version 2 switch state requires a Git identity")
             for name in (
                 "previous_section",
                 "active_section",
@@ -82,14 +95,32 @@ class SwitchManager:
                 data["fingerprint"],
                 backup,
                 data["config_existed"],
+                git_identity,
             )
         except (ValueError, KeyError, TypeError, UnicodeError) as exc:
             raise GhsshError(
                 f"Invalid temporary-switch state; use your safety backup. {exc}"
             ) from exc
 
-    def plan(self, name: str, *, create: bool = False) -> SwitchPlan:
+    def plan(
+        self,
+        name: str,
+        *,
+        create: bool = False,
+        git_name: str | None = None,
+        git_email: str | None = None,
+        repository: Path | None = None,
+    ) -> SwitchPlan:
         self.manager.ensure_not_switching()
+        if (git_name is None) != (git_email is None):
+            raise GhsshError("Provide both --git-name and --git-email for commit switching.")
+        if repository is not None and git_name is None:
+            raise GhsshError("--repo needs --git-name and --git-email, or use --ssh-only.")
+        git_plan = (
+            self.manager.git.plan(repository or Path.cwd(), git_name, git_email)
+            if git_name is not None
+            else None
+        )
         config, old = self.manager.inspect()
         external = list(config.globals)
         for block in config.blocks:
@@ -115,7 +146,7 @@ class SwitchManager:
         old_fp = self.manager.ssh.identity_fingerprint(old) if old else None
         new_config = config.upsert(self.manager.identity_value(key), disable_agent_additions=True)
         self.manager.ssh.validate_config(new_config)
-        return SwitchPlan(config, old, key, new_config, fingerprint, old_fp)
+        return SwitchPlan(config, old, key, new_config, fingerprint, old_fp, git_plan)
 
     def start(
         self,
@@ -125,30 +156,50 @@ class SwitchManager:
         comment: str = "",
         no_passphrase: bool = False,
         expected: SwitchPlan | None = None,
+        git_name: str | None = None,
+        git_email: str | None = None,
+        repository: Path | None = None,
     ) -> Change:
-        plan = self.plan(name, create=create)
+        plan = self.plan(
+            name, create=create, git_name=git_name, git_email=git_email, repository=repository
+        )
         if expected and (
             plan.config.text != expected.config.text
             or plan.fingerprint != expected.fingerprint
             or plan.old_fingerprint != expected.old_fingerprint
+            or plan.git_identity != expected.git_identity
         ):
             raise GhsshError("SSH setup changed since confirmation; run switch again.")
         if any(char in comment for char in ("\n", "\r", "\x00")):
             raise GhsshError("Key comment must be one line.")
         with locked(self.layout):
-            checked = self.plan(name, create=create)
+            checked = self.plan(
+                name, create=create, git_name=git_name, git_email=git_email, repository=repository
+            )
             if (
                 checked.config.text != plan.config.text
                 or checked.fingerprint != plan.fingerprint
                 or checked.old_fingerprint != plan.old_fingerprint
+                or checked.git_identity != plan.git_identity
             ):
                 raise GhsshError("SSH setup changed during the operation; run switch again.")
             config_existed = self.layout.config.exists()
             backup = self.manager.backups.create(plan.config)
+            if plan.git_identity:
+                atomic_write(
+                    self.layout,
+                    backup / "git-identity.json",
+                    json.dumps(plan.git_identity.identity.serialize(), indent=2).encode() + b"\n",
+                )
             paths = [self.layout.config, self.layout.switch_state]
             if create:
                 paths += [plan.key, Path(str(plan.key) + ".pub"), self.layout.state]
-            with Transaction(self.layout, paths) as transaction:
+            with (
+                (
+                    self.manager.git.edit(plan.git_identity) if plan.git_identity else nullcontext()
+                ) as git_edit,
+                Transaction(self.layout, paths) as transaction,
+            ):
                 fingerprint = plan.fingerprint
                 if create:
                     self.manager.ssh.generate(
@@ -160,8 +211,10 @@ class SwitchManager:
                     transaction.mark(self.layout.state)
                 self.manager.config.write(plan.new_config, plan.config.text)
                 transaction.mark(self.layout.config)
+                if git_edit:
+                    git_edit.apply()
                 state = {
-                    "version": 1,
+                    "version": 2 if plan.git_identity else 1,
                     "previous_section": plan.config.section(),
                     "previous_fingerprint": plan.old_fingerprint,
                     "active_section": SSHConfig(plan.new_config).section(),
@@ -170,6 +223,8 @@ class SwitchManager:
                     "backup_id": backup.name,
                     "config_existed": config_existed,
                 }
+                if plan.git_identity:
+                    state["git_identity"] = plan.git_identity.identity.serialize()
                 atomic_write(
                     self.layout,
                     self.layout.switch_state,
@@ -193,6 +248,8 @@ class SwitchManager:
         old = previous.identity(self.layout)
         if old and self.manager.ssh.identity_fingerprint(old) != session.previous_fingerprint:
             raise GhsshError("Previous key fingerprint changed; automatic return refused.")
+        if session.git_identity:
+            self.manager.git.plan_restore(session.git_identity)
         restored = (
             config.restore_section(session.previous_section)
             if session.previous_section
@@ -214,9 +271,25 @@ class SwitchManager:
             if current_session != session or current_config.text != config.text:
                 raise GhsshError("SSH setup changed during the operation; run switch --back again.")
             backup = self.manager.backups.create(config)
-            with Transaction(
-                self.layout, [self.layout.config, self.layout.switch_state]
-            ) as transaction:
+            git_plan = (
+                self.manager.git.plan_restore(session.git_identity)
+                if session.git_identity
+                else None
+            )
+            if session.git_identity:
+                atomic_write(
+                    self.layout,
+                    backup / "git-identity.json",
+                    json.dumps(session.git_identity.serialize(), indent=2).encode() + b"\n",
+                )
+            with (
+                self.manager.git.edit(git_plan) if git_plan else nullcontext() as git_edit,
+                Transaction(
+                    self.layout, [self.layout.config, self.layout.switch_state]
+                ) as transaction,
+            ):
+                if git_edit:
+                    git_edit.apply()
                 if not session.config_existed and not restored.strip():
                     self.layout.checked(self.layout.config).unlink()
                 else:

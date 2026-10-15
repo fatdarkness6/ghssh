@@ -1,5 +1,19 @@
 # Release notes
 
+## v0.2.0 — 2026-10-15
+
+- Switch a repository's commit name and email together with its GitHub SSH key.
+- Use `--git-name`, `--git-email`, and optional `--repo`; interactive switches ask for missing identity details.
+- Restore the original repository-local identity with `ghssh switch --back`, including inheritance from global settings.
+- Keep SSH-only switching available explicitly with `--ssh-only`.
+- Preview both SSH and commit changes with `--dry-run`.
+- Roll back both settings on failure, preserve unrelated Git config changes, and refuse conflicting author overrides.
+- Support existing v0.1.0 SSH-only return points and isolated Git worktree configuration.
+
+Commit identity changes apply only to the selected repository. Global Git settings
+and previously created commits are unchanged. New sessions record the repository
+so `--back` can restore it even when run from another directory.
+
 ## v0.1.0 — 2026-10-15
 
 The first release of ghssh for Linux.

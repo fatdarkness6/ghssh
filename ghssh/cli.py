@@ -325,6 +325,21 @@ def switch_account(
         bool, typer.Option("--create", help="Generate a new key for the other account first.")
     ] = False,
     email: Annotated[str, typer.Option("--email", "--comment")] = "",
+    git_name: Annotated[
+        str | None,
+        typer.Option("--git-name", help="Commit author name for the selected repository."),
+    ] = None,
+    git_email: Annotated[
+        str | None,
+        typer.Option("--git-email", help="Commit email verified on the other GitHub account."),
+    ] = None,
+    repository: Annotated[
+        Path | None,
+        typer.Option("--repo", help="Git working repository; defaults to the current directory."),
+    ] = None,
+    ssh_only: Annotated[
+        bool, typer.Option("--ssh-only", help="Switch SSH without changing commit author settings.")
+    ] = False,
     no_passphrase: Annotated[
         bool, typer.Option(help="Explicitly generate an unencrypted private key.")
     ] = False,
@@ -334,11 +349,21 @@ def switch_account(
     yes: Yes = False,
     dry_run: DryRun = False,
 ) -> None:
-    """Temporarily select another account's key; --back returns to the previous setup."""
+    """Switch SSH and repository commit identity; --back restores both."""
     manager = Manager()
     switcher = SwitchManager(manager)
     if back:
-        if key_name or create or email or no_passphrase or copy:
+        if (
+            key_name
+            or create
+            or email
+            or no_passphrase
+            or copy
+            or git_name is not None
+            or git_email is not None
+            or repository is not None
+            or ssh_only
+        ):
             raise typer.BadParameter("Use --back without a key name or key-creation options.")
         session, config, _, previous_key = switcher.plan_back()
         table(
@@ -350,6 +375,12 @@ def switch_account(
                 ("Key files / SSH agent", "Retain both keys; agent unchanged"),
                 ("Safety backup", f"Create under {manager.layout.backups}"),
                 ("Return point", f"Clear {manager.layout.switch_state} after successful return"),
+                (
+                    "Commit identity",
+                    f"Restore previous user.name/user.email in {session.git_identity.repository}"
+                    if session.git_identity
+                    else "unchanged (saved switch was SSH-only)",
+                ),
             ],
         )
         if dry_run:
@@ -358,6 +389,10 @@ def switch_account(
         change = switcher.back(expected_config=config.text, expected_session=session)
         summary(change, "Previous GitHub SSH configuration restored")
         console.print("Returned to your previous SSH setup. Both key files were retained.")
+        if session.git_identity:
+            console.print(
+                f"Previous repository commit settings restored in {session.git_identity.repository}."
+            )
         return
     if not key_name:
         raise typer.BadParameter("Provide a key name, or use ghssh switch --back.")
@@ -365,7 +400,30 @@ def switch_account(
         raise typer.BadParameter("--email, --no-passphrase and --copy require --create.")
     if any(char in email for char in ("\n", "\r", "\x00")):
         raise GhsshError("Email/comment must be one line.")
-    plan = switcher.plan(key_name, create=create)
+    if ssh_only:
+        if git_name is not None or git_email is not None or repository is not None:
+            raise typer.BadParameter(
+                "--ssh-only cannot be combined with --git-name, --git-email or --repo."
+            )
+    else:
+        manager.git.discover(repository or Path.cwd())
+        if git_name is None or git_email is None:
+            if yes or dry_run:
+                raise GhsshError(
+                    "Supply --git-name and --git-email for --yes/--dry-run, or explicitly choose --ssh-only."
+                )
+            console.print(
+                "GitHub matches commit authors using their email. Enter the identity for the OTHER account."
+            )
+            git_name = git_name if git_name is not None else typer.prompt("Commit name")
+            git_email = (
+                git_email
+                if git_email is not None
+                else typer.prompt("Verified GitHub commit email (or noreply address)")
+            )
+    plan = switcher.plan(
+        key_name, create=create, git_name=git_name, git_email=git_email, repository=repository
+    )
     table(
         "Dry run: temporary switch" if dry_run else "Temporary GitHub account switch",
         [
@@ -389,6 +447,19 @@ def switch_account(
             ("Safety backup", f"Create under {manager.layout.backups}"),
             ("SSH agent", "unchanged; SSH may prompt for the alternate key's passphrase"),
             (
+                "Commit repository",
+                str(plan.git_identity.identity.repository)
+                if plan.git_identity
+                else "unchanged (--ssh-only)",
+            ),
+            (
+                "Commit identity",
+                f"{git_name} <{git_email}>; save previous local values for --back"
+                if plan.git_identity
+                else "unchanged (--ssh-only)",
+            ),
+            ("Global Git identity", "unchanged"),
+            (
                 "GitHub",
                 "Register a newly generated public key on your SECOND account"
                 if create
@@ -402,7 +473,14 @@ def switch_account(
         raise GhsshError("Passphrase entry requires a terminal or explicit --no-passphrase.")
     confirm("Temporarily switch github.com to this identity?", yes)
     change = switcher.start(
-        key_name, create=create, comment=email, no_passphrase=no_passphrase, expected=plan
+        key_name,
+        create=create,
+        comment=email,
+        no_passphrase=no_passphrase,
+        expected=plan,
+        git_name=git_name,
+        git_email=git_email,
+        repository=repository,
     )
     summary(change, "Alternate key selected; previous configuration saved")
     if create:
@@ -412,6 +490,15 @@ def switch_account(
         "Test interactively: ssh -T git@github.com (check the username in GitHub's reply)."
     )
     console.print("Return whenever ready: ghssh switch --back")
+    if plan.git_identity:
+        console.print(
+            f"Future commits in {plan.git_identity.identity.repository}: {git_name} <{git_email}>."
+        )
+        console.print(
+            "Existing commits are unchanged. The email must belong to your other GitHub account."
+        )
+    else:
+        console.print("Commit author settings were not changed (--ssh-only).")
     console.print("This selects Git SSH authentication; browser and gh CLI logins are separate.")
 
 
@@ -553,7 +640,11 @@ def list_keys() -> None:
 
 @app.command()
 @guarded
-def status() -> None:
+def status(
+    repository: Annotated[
+        Path | None, typer.Option("--repo", help="Repository whose commit identity to inspect.")
+    ] = None,
+) -> None:
     """Inspect local configuration, ssh-agent and GitHub CLI authentication."""
     manager = Manager()
     manager.layout.checked(manager.layout.config)
@@ -604,6 +695,30 @@ def status() -> None:
     )
     if manager.layout.checked(manager.layout.switch_state).exists():
         console.print("Temporary account switch active. Return with: ghssh switch --back")
+    try:
+        session = SwitchManager(manager).read()
+        selected = repository or (
+            session.git_identity.repository if session and session.git_identity else Path.cwd()
+        )
+        root, _ = manager.git.discover(selected)
+        table(
+            "Git commit identity",
+            [
+                ("Repository", str(root)),
+                ("Commit name", manager.git.effective(root, "user.name") or "not configured"),
+                ("Commit email", manager.git.effective(root, "user.email") or "not configured"),
+                (
+                    "Saved return point",
+                    "SSH + commit identity"
+                    if session and session.git_identity
+                    else "SSH-only"
+                    if session
+                    else "none",
+                ),
+            ],
+        )
+    except GhsshError as exc:
+        console.print(f"Commit identity: {exc}")
 
 
 @app.command("test")

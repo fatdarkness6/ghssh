@@ -7,6 +7,7 @@ from pathlib import Path
 
 from .backup_manager import Backup, BackupManager
 from .config_manager import ConfigManager, SSHConfig
+from .git_manager import GitManager
 from .github_manager import GitHubManager
 from .ssh_manager import SSHManager
 from .utils import GhsshError, Layout, Runner, Transaction, locked
@@ -27,6 +28,7 @@ class Manager:
         self.ssh = SSHManager(self.layout, self.runner)
         self.backups = BackupManager(self.layout, self.ssh)
         self.github = GitHubManager(self.runner)
+        self.git = GitManager(self.runner)
 
     def ensure_not_switching(self) -> None:
         if self.layout.checked(self.layout.switch_state).exists():

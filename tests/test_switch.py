@@ -213,7 +213,10 @@ def test_global_automatic_agent_loading_refused(configured):
 
 @pytest.mark.parametrize(
     "args",
-    [["switch", "github_second", "--dry-run"], ["switch", "github_new", "--create", "--dry-run"]],
+    [
+        ["switch", "github_second", "--ssh-only", "--dry-run"],
+        ["switch", "github_new", "--create", "--ssh-only", "--dry-run"],
+    ],
 )
 def test_switch_dry_run_changes_nothing(configured, monkeypatch, args):
     manager = configured
@@ -242,7 +245,7 @@ def test_switch_cli_create_and_back(configured, monkeypatch):
     monkeypatch.setattr(cli, "Manager", lambda: manager)
     runner = CliRunner()
     result = runner.invoke(
-        cli.app, ["switch", "github_second", "--create", "--no-passphrase", "--yes"]
+        cli.app, ["switch", "github_second", "--create", "--no-passphrase", "--ssh-only", "--yes"]
     )
     assert result.exit_code == 0, result.output
     assert "SECOND GitHub account" in result.output
@@ -257,7 +260,7 @@ def test_switch_cancel_changes_nothing(configured, monkeypatch):
     alternate(manager)
     monkeypatch.setattr(cli, "Manager", lambda: manager)
     before = snapshot(manager)
-    result = CliRunner().invoke(cli.app, ["switch", "github_second"], input="n\n")
+    result = CliRunner().invoke(cli.app, ["switch", "github_second", "--ssh-only"], input="n\n")
     assert result.exit_code == 130
     assert snapshot(manager) == before
 

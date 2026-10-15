@@ -6,16 +6,17 @@
 key for each account, switch when you need to, and keep your original keys intact.
 You can also create keys, check your connection, and back up or restore your setup.
 
-**Version:** 0.1.0 · **Platform:** Linux · **Python:** 3.11+ · **License:** MIT
+**Version:** 0.2.0 · **Platform:** Linux · **Python:** 3.11+ · **License:** MIT
 
 ```sh
-ghssh switch github_second  # Use your other account's existing key.
-ghssh switch --back         # Return to your previous setup.
+# Run inside the repository you want to work on:
+ghssh switch github_second  # Prompts for the other account's commit name/email.
+ghssh switch --back         # Restore the previous SSH and commit settings.
 ```
 
 New to SSH keys? The [second-account guide](#temporarily-use-a-second-github-account)
-walks through creating a key and adding it to your other account. Browser login and
-Git commit author details are separate from SSH authentication.
+walks through creating a key and adding it to your other account. The switch can
+update repository commit details along with SSH; browser login stays separate.
 
 ## Installation
 
@@ -117,7 +118,7 @@ checks, or bypass the separate remote deletion confirmation.
 | --- | --- |
 | `add` | Create Ed25519 key pair, load agent, configure GitHub, show public key |
 | `replace` | Back up existing setup and switch to a newly generated key |
-| `switch KEY` / `switch --back` | Temporarily use another account's key, then return |
+| `switch KEY` / `switch --back` | Temporarily switch SSH and repository commit identity, then restore both |
 | `remove` | Remove GitHub block; optionally delete a verified owned key pair |
 | `list` | Show detected private/public pairs, roles, fingerprints and agent identities |
 | `status` | Inspect directory, config, key pair, agent and GitHub CLI authentication |
@@ -177,22 +178,26 @@ with the displayed `ssh-add` command when ready.
 ## Temporarily use a second GitHub account
 
 Use `switch` for account changes. Keep `replace` for permanent key rotation.
+Run it from the Git repository you want to work on, or select one with `--repo`.
 The first time, create a separate key while saving a return point:
 
 ```sh
-ghssh switch github_second --create --email "second@example.com" --copy
+ghssh switch github_second --create --email "second@example.com" --copy \
+  --git-name "Second Account" --git-email "second@example.com"
 ```
 
 This retains the original key, creates `~/.ssh/github_second`, backs up the current
-setup, and temporarily selects the second key for `github.com`. It also works if
+setup, temporarily selects the second key for `github.com`, and sets the selected
+repository's `user.name` and `user.email`. It also works if
 the original account uses a default key such as `id_ed25519` with no explicit
 GitHub Host block. Enter a passphrase when OpenSSH asks.
 
 Sign into the **second** account in your browser and add the displayed public key
 at [GitHub's SSH key settings](https://github.com/settings/ssh/new). The email is
-just a key comment; the GitHub account where you register the public key determines
-which account authenticates. `switch` does not use the current `gh` login to upload
-anything.
+just a key comment. `--git-email` separately sets the commit author email and must
+be verified on the target account (its GitHub noreply address is also supported).
+The GitHub account where you register the public key determines which account
+authenticates. `switch` does not use the current `gh` login to upload anything.
 
 ```sh
 ssh -T git@github.com  # Check that GitHub greets the second account's username.
@@ -204,17 +209,33 @@ ssh -T git@github.com  # Check that your original account is back.
 For later switches, reuse the existing second key:
 
 ```sh
-ghssh switch github_second
+ghssh switch github_second --git-name "Second Account" --git-email "second@example.com"
 # Work with your second account.
 ghssh switch --back
 ```
 
 If you already have the second account's key, start directly with
-`ghssh switch EXISTING_KEY_BASENAME`; `--create` is only needed once. Both directions
-support `--dry-run` and `--yes`. Existing destination keys are never overwritten.
+`ghssh switch EXISTING_KEY_BASENAME`; `--create` is only needed once. Interactive
+switches prompt for missing commit name/email. With `--yes` or `--dry-run`, provide
+both values explicitly. Existing destination keys are never overwritten.
 
-Switching changes only the GitHub SSH configuration, leaves key files and loaded
-agent identities alone, and disables automatic agent additions for the temporary
+To select a repository while running from another directory:
+
+```sh
+ghssh switch github_second --repo /path/to/your/repository \
+  --git-name "Second Account" --git-email "second@example.com" --dry-run
+```
+
+For an SSH-only switch, including when outside a Git repository:
+
+```sh
+ghssh switch github_second --ssh-only
+ghssh switch --back
+```
+
+Switching changes the GitHub SSH configuration and, unless `--ssh-only` is used,
+the selected repository's commit name/email. It leaves existing key files and loaded
+agent identities alone and disables automatic agent additions for the temporary
 GitHub block. An encrypted alternate key may prompt for its passphrase during
 normal Git operations. Use the interactive `ssh -T` check above; `ghssh test` uses
 BatchMode, which cannot prompt for a key that is not loaded in an agent. Conflicting
@@ -228,9 +249,24 @@ backup is created in both directions. Switches have one return point: return bef
 starting another switch. Replacement, removal and backup restoration are blocked
 while a temporary switch is active, protecting that return point.
 
-This controls Git authentication over SSH. Browser sessions, `gh` authentication,
-HTTPS Git credentials and Git commit author names/emails are independent and are
-not changed.
+Commit name/email changes affect future commits in the selected repository,
+including normal commits made in VS Code. They never change global settings or
+rewrite existing commits. On return, previous local values are restored; if those
+values were absent, the overrides are removed so Git inherits its current defaults.
+Unrelated Git config edits made during the switch are preserved. A changed commit
+identity is treated as a conflict and stops automatic return. The safety backup
+includes `git-identity.json` containing the saved author fields for manual recovery.
+
+Only one repository's commit settings are selected, while the `github.com` SSH
+selection applies to normal SSH connections from all repositories. Browser
+sessions, `gh` authentication and HTTPS credentials remain independent. Local
+Include/IncludeIf directives and explicit author/committer overrides require manual
+identity management; environment overrides that bypass the selected identity are
+also refused. Linked worktrees require `extensions.worktreeConfig` to be enabled
+so each worktree can have its own identity.
+
+Saved SSH-only return points from v0.1.0 still work and restore only SSH settings.
+Finish any existing switch before starting a new combined SSH/commit switch.
 
 ## Backups and recovery
 
