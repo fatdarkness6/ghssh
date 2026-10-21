@@ -1,6 +1,7 @@
 """Use disposable Git repositories; SSH/network commands stay mocked."""
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -395,3 +396,21 @@ def test_yes_without_commit_details_does_not_silently_switch_only_ssh(git_setup,
 def test_saved_state_validates_types():
     with pytest.raises(GhsshError):
         GitIdentity.parse({"repository": "../global"})
+
+
+@pytest.mark.skipif(os.name != "nt", reason="requires native Windows short path aliases")
+def test_switch_from_windows_short_path_alias(git_setup):
+    import win32api
+
+    manager, repository, _ = git_setup
+    alias = Path(win32api.GetShortPathName(str(repository)))
+    if alias == repository:
+        pytest.skip("8.3 aliases are disabled on this volume")
+    change = SwitchManager(manager).start(
+        "github_second", repository=alias,
+        git_name="Second Developer", git_email="second@example.com",
+    )
+    assert change.backup.is_dir()
+    assert manager.git.effective(repository, "user.email") == "second@example.com"
+    SwitchManager(manager).back()
+    assert manager.git.effective(repository, "user.email") == "primary@example.com"

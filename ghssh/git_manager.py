@@ -155,9 +155,17 @@ class GitManager:
                 "Commit switching needs a Git working repository. Use --repo PATH or --ssh-only."
             )
         repository = Path(result.stdout.strip())
+        within_repository = directory.is_relative_to(repository)
+        if platform.WINDOWS and repository.is_absolute() and not within_repository:
+            # Windows TEMP can use an 8.3 alias while Git returns the long name.
+            # The input and its parents were checked for reparse points above;
+            # compare actual directory identities without resolving away links.
+            within_repository = any(
+                candidate.samefile(repository) for candidate in (directory, *directory.parents)
+            )
         if (
             not repository.is_absolute()
-            or not directory.is_relative_to(repository)
+            or not within_repository
             or not platform.owned(repository)
         ):
             raise GhsshError("Cannot safely identify the selected Git working repository.")

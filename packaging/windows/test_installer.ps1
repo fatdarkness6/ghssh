@@ -1,6 +1,7 @@
 param([Parameter(Mandatory = $true)][string]$Version)
 
 $ErrorActionPreference = 'Stop'
+$pythonExecutable = (Get-Command python -ErrorAction Stop).Source
 $installer = (Resolve-Path "dist/ghssh-${Version}-windows-x64-setup.exe").Path
 $testRoot = Join-Path $env:RUNNER_TEMP 'ghssh installer test'
 $installDir = Join-Path $testRoot 'app with spaces'
@@ -27,7 +28,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'CMD launch failed' }
     & powershell.exe -NoProfile -Command 'ghssh --version'
     if ($LASTEXITCODE -ne 0) { throw 'PowerShell launch failed' }
-    python packaging/windows/smoke_test.py (Join-Path $installDir 'ghssh.exe')
+    & $pythonExecutable packaging/windows/smoke_test.py (Join-Path $installDir 'ghssh.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Installed executable smoke test failed' }
 
     Invoke-Setup
