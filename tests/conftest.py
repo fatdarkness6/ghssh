@@ -9,8 +9,33 @@ from pathlib import Path
 import pytest
 
 from ghssh.manager import Manager
+from ghssh.platform_support import WINDOWS
 from ghssh.ssh_manager import public_fingerprint
 from ghssh.utils import GhsshError, Layout
+
+
+def assert_permissions(path: Path, expected: int) -> None:
+    if not WINDOWS:
+        assert path.stat().st_mode & 0o777 == expected
+        return
+    import win32con
+    import win32security
+
+    from ghssh._windows import user_sid
+
+    info = win32security.GetNamedSecurityInfo(
+        str(path), win32security.SE_FILE_OBJECT,
+        win32security.OWNER_SECURITY_INFORMATION | win32security.DACL_SECURITY_INFORMATION,
+    )
+    assert info.GetSecurityDescriptorOwner() == user_sid()
+    assert info.GetSecurityDescriptorControl()[0] & win32security.SE_DACL_PROTECTED
+    acl = info.GetSecurityDescriptorDacl()
+    assert acl is not None and acl.GetAceCount() == 1
+    header, mask, sid = acl.GetAce(0)
+    assert header[0] == win32security.ACCESS_ALLOWED_ACE_TYPE
+    assert not header[1] & win32con.INHERITED_ACE
+    assert sid == user_sid()
+    assert mask == win32con.FILE_ALL_ACCESS
 
 
 def public_key(seed: str = "test") -> str:

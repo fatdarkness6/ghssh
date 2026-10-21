@@ -1,25 +1,21 @@
 import json
-import stat
 from pathlib import Path
 
 import pytest
+from conftest import assert_permissions
 
 from ghssh.utils import GhsshError
-
-
-def mode(path):
-    return stat.S_IMODE(path.stat().st_mode)
 
 
 def test_add_sets_permissions_and_ownership(manager):
     change = manager.add("github_first", "test@example.com", no_passphrase=True)
     assert change.old_key is None
     key = change.new_key
-    assert mode(manager.layout.ssh) == 0o700
-    assert mode(key) == 0o600
-    assert mode(Path(str(key) + ".pub")) == 0o644
-    assert mode(manager.layout.config) == 0o600
-    assert mode(manager.layout.state) == 0o600
+    assert_permissions(manager.layout.ssh, 0o700)
+    assert_permissions(key, 0o600)
+    assert_permissions(Path(str(key) + ".pub"), 0o644)
+    assert_permissions(manager.layout.config, 0o600)
+    assert_permissions(manager.layout.state, 0o600)
     assert manager.config.read().identity(manager.layout) == key
     assert manager.ssh.owned(key)
 
@@ -45,8 +41,9 @@ def test_replace_keeps_old_key_and_creates_complete_backup(configured):
     assert change.backup.joinpath("config.snapshot").read_bytes() == config
     assert manager.config.read().identity(manager.layout) == change.new_key
     assert manager.backups.validate(change.backup).identity == old
-    assert mode(change.backup) == 0o700
-    assert all(mode(path) == 0o600 for path in change.backup.iterdir())
+    assert_permissions(change.backup, 0o700)
+    for path in change.backup.iterdir():
+        assert_permissions(path, 0o600)
 
 
 def test_missing_github_identity_replace_refused(manager):
@@ -119,8 +116,8 @@ def test_backup_restore_preserves_other_hosts(configured):
     assert manager.config.read().identity(manager.layout) == original
     assert original.read_bytes() == original_data
     assert "Host server.example\n    Port 2222\n" in manager.layout.config.read_text()
-    assert mode(original) == 0o600
-    assert mode(Path(str(original) + ".pub")) == 0o644
+    assert_permissions(original, 0o600)
+    assert_permissions(Path(str(original) + ".pub"), 0o644)
     assert (change.backup / "restore-target.private").read_text() == "overwritten original file"
 
 
@@ -176,7 +173,7 @@ def test_symlink_and_hardlink_refused(manager, tmp_path):
 
 
 def test_generation_failure_rolls_back(manager):
-    manager.runner.fail_on = "ssh-add /"
+    manager.runner.fail_on = "ssh-add "
     with pytest.raises(GhsshError):
         manager.add("github_new", "", no_passphrase=True)
     assert not (manager.layout.ssh / "github_new").exists()

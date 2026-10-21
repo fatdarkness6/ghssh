@@ -44,7 +44,7 @@ class Manager:
     @staticmethod
     def identity_value(path: Path) -> str:
         # Double-quoted OpenSSH paths preserve spaces in custom HOME directories.
-        return '"' + str(path).replace("\\", "\\\\").replace('"', '\\"') + '"'
+        return '"' + path.as_posix().replace("\\", "\\\\").replace('"', '\\"') + '"'
 
     def add(
         self,

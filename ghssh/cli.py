@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shlex
 import shutil
+import subprocess
 import sys
 from datetime import UTC, datetime
 from functools import wraps
@@ -17,14 +18,22 @@ from rich.table import Table
 from rich.text import Text
 
 from . import __version__
+from . import platform_support as platform
 from .manager import Change, Manager
 from .switch_manager import SwitchManager
 from .utils import GhsshError
 
+if platform.WINDOWS:
+    # Console APIs support Unicode, but redirected Windows streams can default
+    # to a legacy code page. Keep CLI pipes and captured output consistently UTF-8.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None and hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
 app = typer.Typer(
     no_args_is_help=True,
     invoke_without_command=True,
-    help="Safely manage GitHub SSH identities on Linux.",
+    help="Safely manage GitHub SSH and commit identities on Linux and Windows.",
 )
 console = Console(markup=False, highlight=False)
 VERBOSE = False
@@ -69,13 +78,21 @@ def main(
     if version:
         console.print(f"ghssh {__version__}")
         raise typer.Exit()
-    if sys.platform != "linux":
-        raise typer.BadParameter("This release supports Linux only.")
+    if sys.platform not in {"linux", "win32"}:
+        raise typer.BadParameter("This release supports Linux and Windows.")
 
 
 def confirm(message: str, yes: bool) -> None:
     if not yes and not typer.confirm(message, default=False):
         raise typer.Abort()
+
+
+def permission_label(mode: int) -> str:
+    return "current-user ACL" if platform.WINDOWS else f"{mode:o}"
+
+
+def command_text(args: list[str]) -> str:
+    return subprocess.list2cmdline(args) if platform.WINDOWS else shlex.join(args)
 
 
 def table(title: str, rows: list[tuple[str, str]]) -> None:
@@ -131,7 +148,7 @@ def publish(
             )
             console.print(
                 "Use https://github.com/settings/ssh/new or retry: "
-                + shlex.join(["gh", "ssh-key", "add", str(public), "--type", "authentication"])
+                + command_text(["gh", "ssh-key", "add", str(public), "--type", "authentication"])
             )
             raise GhsshError(str(exc)) from exc
         console.print("Public key uploaded to GitHub. Run ghssh test to check authentication.")
@@ -144,7 +161,7 @@ def publish(
 def copy_public(text: str) -> None:
     from .utils import Runner
 
-    candidates = [
+    candidates = [["clip.exe"]] if platform.WINDOWS else [
         ["wl-copy"],
         ["xclip", "-selection", "clipboard"],
         ["xsel", "--clipboard", "--input"],
@@ -205,7 +222,7 @@ def create_key(
     table(
         "Dry run: planned changes" if dry_run else "Planned changes",
         [
-            ("SSH directory", f"Create if absent; set {manager.layout.ssh} to 700"),
+            ("SSH directory", f"Create if absent; protect {manager.layout.ssh} ({permission_label(0o700)})"),
             ("Old key", f"{current} (retained)" if current else "none"),
             (
                 "Backup",
@@ -213,19 +230,22 @@ def create_key(
                 if config.target()
                 else "no existing GitHub block",
             ),
-            ("Generate", f"Ed25519 pair: {key} (600), {key}.pub (644)"),
+            ("Generate", f"Ed25519 pair: {key} ({permission_label(0o600)}), {key}.pub ({permission_label(0o644)})"),
             (
                 "Passphrase",
                 "empty (explicit --no-passphrase)"
                 if no_passphrase
                 else "ssh-keygen will prompt securely",
             ),
-            ("SSH agent", f"Use existing agent or start one, then ssh-add {key}"),
+            ("SSH agent", (
+                f"Use Windows OpenSSH agent service, then ssh-add {key}"
+                if platform.WINDOWS else f"Use existing agent or start one, then ssh-add {key}"
+            )),
             (
                 "Configuration",
-                f"{manager.layout.config} (600): GitHub IdentityFile → {key}, User git, IdentitiesOnly yes",
+                f"{manager.layout.config} ({permission_label(0o600)}): GitHub IdentityFile → {key}, User git, IdentitiesOnly yes",
             ),
-            ("Ownership record", f"Record new key fingerprint in {manager.layout.state} (600)"),
+            ("Ownership record", f"Record new key fingerprint in {manager.layout.state} ({permission_label(0o600)})"),
             (
                 "GitHub",
                 f"Upload only {key}.pub to account {account}"
@@ -431,7 +451,7 @@ def switch_account(
             ("Alternate key", str(plan.key)),
             (
                 "Key files",
-                f"Generate {plan.key} (600), {plan.key}.pub (644)"
+                f"Generate {plan.key} ({permission_label(0o600)}), {plan.key}.pub ({permission_label(0o644)})"
                 if create
                 else "Use existing pair; contents and permissions unchanged",
             ),
@@ -442,7 +462,7 @@ def switch_account(
             ),
             (
                 "Return point",
-                f"Save previous GitHub section in {manager.layout.switch_state} (600)",
+                f"Save previous GitHub section in {manager.layout.switch_state} ({permission_label(0o600)})",
             ),
             ("Safety backup", f"Create under {manager.layout.backups}"),
             ("SSH agent", "unchanged; SSH may prompt for the alternate key's passphrase"),
@@ -749,10 +769,10 @@ def backup(dry_run: DryRun = False) -> None:
         table(
             "Dry run: backup",
             [
-                ("Directory", str(manager.layout.backups) + "/<UTC-timestamp>_<id> (700)"),
+                ("Directory", str(manager.layout.backups) + f"/<UTC-timestamp>_<id> ({permission_label(0o700)})"),
                 (
                     "Contents",
-                    f"Key pair for {key or 'none'}, GitHub section, config snapshot, metadata (600)",
+                    f"Key pair for {key or 'none'}, GitHub section, config snapshot, metadata ({permission_label(0o600)})",
                 ),
             ],
         )
@@ -829,7 +849,7 @@ def restore(
             ("Safety backup", str(manager.layout.backups) + "/<new UTC-timestamp>_<id>"),
             (
                 "Configuration",
-                "Restore only github.com section; config mode 600, private 600, public 644",
+                f"Restore only github.com section; config {permission_label(0o600)}, private {permission_label(0o600)}, public {permission_label(0o644)}",
             ),
             ("Agent / GitHub", "unchanged; register the restored public key if needed"),
         ],
@@ -843,7 +863,7 @@ def restore(
     )
     if change.new_key:
         console.print(
-            "Load the restored identity when ready: " + shlex.join(["ssh-add", str(change.new_key)])
+            "Load the restored identity when ready: " + command_text(["ssh-add", str(change.new_key)])
         )
     console.print(
         "Agent and remote GitHub keys were retained. Run ghssh test after checking registration."

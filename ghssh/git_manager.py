@@ -10,21 +10,22 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Self
 
+from . import platform_support as platform
 from .utils import GhsshError, Runner, read_bytes
 
 
 def checked_path(path: Path) -> Path:
-    if not path.is_absolute() or ".." in path.parts:
+    if not path.is_absolute() or ".." in path.parts or not platform.safe_parts(path):
         raise GhsshError("Git configuration path must be absolute without traversal.")
     for component in reversed((path, *path.parents)):
-        if component.is_symlink():
-            raise GhsshError(f"Refusing a symlink in the Git configuration path: {component}")
+        if platform.is_link(component):
+            raise GhsshError(f"Refusing a symlink/reparse point in the Git configuration path: {component}")
     if path.exists():
         info = path.stat()
-        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+        if not stat.S_ISREG(info.st_mode) or not platform.owned(path, info) or info.st_nlink != 1:
             raise GhsshError(f"Refusing unsafe Git configuration file: {path}")
     parent = path.parent.stat()
-    if parent.st_uid != os.getuid() or not stat.S_ISDIR(parent.st_mode):
+    if not platform.owned(path.parent, parent) or not stat.S_ISDIR(parent.st_mode):
         raise GhsshError(f"Git configuration directory is not owned by this user: {path.parent}")
     return path
 
@@ -104,7 +105,7 @@ class GitIdentity:
 class GitPlan:
     identity: GitIdentity
     before: bytes | None = field(repr=False)
-    mode: int
+    mode: platform.Permissions
     previous_effective_name: str
     previous_effective_email: str
     restoring: bool = False
@@ -140,7 +141,11 @@ class GitManager:
     def discover(self, directory: Path) -> tuple[Path, Path]:
         self.check_environment()
         directory = directory.absolute()
-        if ".." in directory.parts or any(p.is_symlink() for p in (directory, *directory.parents)):
+        if (
+            ".." in directory.parts
+            or not platform.safe_parts(directory)
+            or any(platform.is_link(p) for p in (directory, *directory.parents))
+        ):
             raise GhsshError("Use a repository path without traversal or symlinks.")
         result = self.runner.run(
             ["git", "-C", str(directory), "rev-parse", "--show-toplevel"], check=False
@@ -153,7 +158,7 @@ class GitManager:
         if (
             not repository.is_absolute()
             or not directory.is_relative_to(repository)
-            or repository.stat().st_uid != os.getuid()
+            or not platform.owned(repository)
         ):
             raise GhsshError("Cannot safely identify the selected Git working repository.")
 
@@ -225,7 +230,7 @@ class GitManager:
         return GitPlan(
             identity,
             before,
-            stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600,
+            platform.permissions(path) if path.exists() else 0o600,
             self.effective(repository, "user.name"),
             self.effective(repository, "user.email"),
         )
@@ -246,7 +251,7 @@ class GitManager:
         return GitPlan(
             identity,
             read_bytes(path) if path.exists() else None,
-            stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o600,
+            platform.permissions(path) if path.exists() else 0o600,
             self.effective(repository, "user.name"),
             self.effective(repository, "user.email"),
             True,
@@ -319,14 +324,15 @@ class GitEdit:
         checked_path(self.path)
         self.manager.check_environment()
         try:
-            self.fd = os.open(
-                self.lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600
+            self.fd = platform.open_checked(
+                self.lock, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
             )
         except FileExistsError as exc:
             raise GhsshError(
                 f"Git configuration is locked by another process: {self.lock}"
             ) from exc
         try:
+            platform.secure_mode(self.lock, 0o600, fd=self.fd)
             current = read_bytes(self.path) if self.path.exists() else None
             if current != self.plan.before:
                 raise GhsshError("Git configuration changed since inspection; run switch again.")
@@ -341,7 +347,7 @@ class GitEdit:
         staged = Path(filename)
         try:
             with os.fdopen(fd, "wb") as stream:
-                os.fchmod(stream.fileno(), self.plan.mode)
+                platform.secure_mode(staged, self.plan.mode, fd=stream.fileno())
                 stream.write(data)
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -351,10 +357,14 @@ class GitEdit:
             staged.unlink(missing_ok=True)
 
     def apply(self) -> None:
-        fd, filename = tempfile.mkstemp(prefix=".ghssh-git-edit-", dir=self.path.parent)
-        staged = Path(filename)
-        os.close(fd)
+        directory = tempfile.TemporaryDirectory(prefix=".ghssh-git-edit-", dir=self.path.parent)
+        staged = Path(directory.name) / "config"
         try:
+            # Git creates its own adjacent .lock files while editing. A private
+            # directory also protects those files on Windows before publication.
+            platform.secure_mode(Path(directory.name), 0o700)
+            staged.touch(mode=0o600)
+            platform.secure_mode(staged, 0o600)
             staged.write_bytes(self.plan.before or b"")
             identity = self.plan.identity
             for key, values in (
@@ -394,8 +404,7 @@ class GitEdit:
             if not self.plan.restoring:
                 self.manager.verify_effective(identity)
         finally:
-            staged.unlink(missing_ok=True)
-            Path(str(staged) + ".lock").unlink(missing_ok=True)
+            directory.cleanup()
 
     def _release(self) -> None:
         if self.fd is not None:

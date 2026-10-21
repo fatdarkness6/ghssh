@@ -14,6 +14,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import platform_support as platform
+from .config_manager import SSHConfig
 from .utils import GhsshError, Layout, Runner, atomic_write, read_bytes
 
 RESERVED = {
@@ -84,6 +86,21 @@ class SSHManager:
 
     def validate_config(self, text: str) -> None:
         """Let OpenSSH catch invalid directives, reading stdin without a temp file."""
+        if platform.WINDOWS:
+            # Windows has no /dev/stdin. Include/Match are already forbidden, so
+            # validate each source directive with -o against the null config.
+            # This also keeps --dry-run free of temporary filesystem writes.
+            config = SSHConfig(text)
+            config.validate_edit()
+            args = ["ssh", "-G", "-F", "NUL", "-o", "CanonicalizeHostname=no"]
+            for directive in config.directives:
+                if directive.name != "host":
+                    args += ["-o", config.lines[directive.line].strip()]
+            args.append("github.com")
+            if sum(len(arg) + 4 for arg in args) > 28000:
+                raise GhsshError("SSH config is too large for safe Windows command-line validation.")
+            self.runner.run(args)
+            return
         self.runner.run(
             ["ssh", "-G", "-F", "/dev/stdin", "-o", "CanonicalizeHostname=no", "github.com"],
             input=text,
@@ -111,9 +128,9 @@ class SSHManager:
     def key_path(self, name: str) -> Path:
         if (
             not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,119}", name)
-            or name in RESERVED
-            or name.endswith(".pub")
-            or name.startswith("ghssh-")
+            or name.lower() in RESERVED
+            or name.lower().endswith(".pub")
+            or name.lower().startswith("ghssh-")
         ):
             raise GhsshError(
                 "Key name must be a simple basename (letters, digits, _, -, .), not a reserved SSH file."
@@ -133,6 +150,7 @@ class SSHManager:
         if "\n" in comment or "\r" in comment or "\x00" in comment:
             raise GhsshError("Key comment must be a single line.")
         with tempfile.TemporaryDirectory(prefix=".ghssh-key-", dir=self.layout.ssh) as directory:
+            platform.secure_mode(Path(directory), 0o700)
             staged = Path(directory) / "identity"
             args = ["ssh-keygen", "-t", "ed25519", "-f", str(staged), "-C", comment]
             if no_passphrase:
@@ -142,20 +160,33 @@ class SSHManager:
             if not staged.is_file() or not public.is_file():
                 raise GhsshError("ssh-keygen did not produce a complete key pair.")
             public_material(read_bytes(public).decode())
-            staged.chmod(0o600)
-            public.chmod(0o644)
+            platform.secure_mode(staged, 0o600)
+            platform.secure_mode(public, 0o644)
             self.available(path)
             # Hard links publish each new file with exclusive-create semantics.
             # The staging directory is deleted before the key is subsequently inspected.
-            os.link(staged, path, follow_symlinks=False)
+            if platform.WINDOWS:
+                # Windows rename fails if the destination exists; it never overwrites.
+                os.rename(staged, path)
+            else:
+                os.link(staged, path, follow_symlinks=False)
             try:
-                os.link(public, Path(str(path) + ".pub"), follow_symlinks=False)
+                destination = Path(str(path) + ".pub")
+                if platform.WINDOWS:
+                    os.rename(public, destination)
+                else:
+                    os.link(public, destination, follow_symlinks=False)
             except BaseException:
                 path.unlink()
                 raise
 
     def agent_fingerprints(self) -> tuple[bool, set[str]]:
-        if not shutil.which("ssh-add"):
+        if platform.WINDOWS:
+            try:
+                platform.ssh_command("ssh-add")
+            except FileNotFoundError:
+                return False, set()
+        elif not shutil.which("ssh-add"):
             return False, set()
         result = self.runner.run(["ssh-add", "-l", "-E", "sha256"], check=False, env=self.env)
         if result.returncode not in (0, 1):
@@ -165,6 +196,13 @@ class SSHManager:
     def ensure_agent(self) -> None:
         if self.agent_fingerprints()[0]:
             return
+        if platform.WINDOWS:
+            raise GhsshError(
+                "The Windows OpenSSH Authentication Agent service is unavailable. "
+                "In an Administrator PowerShell run: "
+                "Set-Service ssh-agent -StartupType Automatic; Start-Service ssh-agent. "
+                "Then retry in your normal terminal. Switching existing keys does not need the agent."
+            )
         # Unix socket paths are limited to about 108 bytes; HOME can be much longer.
         self.agent_directory = Path(tempfile.mkdtemp(prefix="ghssh-agent-", dir="/tmp"))
         socket_path = self.agent_directory / "agent.sock"

@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .config_manager import ConfigManager, SSHConfig
+from .platform_support import secure_mode
 from .ssh_manager import SSHManager
 from .utils import GhsshError, Layout, Transaction, atomic_write, read_bytes
 
@@ -78,10 +79,11 @@ class BackupManager:
         self.layout.ensure()
         root = self.layout.checked(self.layout.backups)
         root.mkdir(mode=0o700, exist_ok=True)
-        root.chmod(0o700)
+        secure_mode(root, 0o700)
         backup_id = datetime.now(UTC).strftime("%Y-%m-%d_%H-%M-%S_") + uuid4().hex[:8]
         directory = root / backup_id
         directory.mkdir(mode=0o700)
+        secure_mode(directory, 0o700)
         metadata = {
             "version": 1,
             "created_at": datetime.now(UTC).isoformat(),

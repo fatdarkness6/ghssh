@@ -12,7 +12,8 @@ from ghssh.utils import Layout, Runner
 
 @pytest.mark.integration
 @pytest.mark.skipif(
-    os.environ.get("GHSSH_RUN_INTEGRATION") != "1", reason="opt-in local OpenSSH test"
+    os.environ.get("GHSSH_RUN_INTEGRATION") != "1" or os.name == "nt",
+    reason="opt-in Linux agent test; Windows uses the service-free switch test",
 )
 def test_real_openssh_lifecycle(tmp_path, monkeypatch):
     for tool in ("ssh", "ssh-keygen", "ssh-agent", "ssh-add"):

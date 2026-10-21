@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 
 import pytest
@@ -182,6 +183,7 @@ def test_account_switch_blocks_upload(configured, monkeypatch):
         manager.github.add(public, "title", account="confirmed-account")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Unix agents use sockets; Windows uses a service")
 def test_agent_start_uses_explicit_socket_and_environment(manager):
     manager.layout.ensure()
     manager.runner.agent = False

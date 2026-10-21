@@ -40,7 +40,9 @@ def test_switch_existing_and_return_keeps_both_keys_and_agent(configured):
     change = switcher.start(second.name)
     assert change.backup.is_dir()
     assert manager.config.read().identity(manager.layout) == second
-    assert manager.layout.switch_state.stat().st_mode & 0o777 == 0o600
+    from conftest import assert_permissions
+
+    assert_permissions(manager.layout.switch_state, 0o600)
     assert switcher.read().active_key == second
     assert "AddKeysToAgent no" in manager.layout.config.read_text()
     switcher.back()

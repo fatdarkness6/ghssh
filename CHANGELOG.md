@@ -1,5 +1,22 @@
 # Release notes
 
+## v0.3.0 — Unreleased
+
+- Add native Windows 10/11 support for CMD and PowerShell.
+- Use Windows file ownership checks, protected current-user ACLs and process locks.
+- Reject junctions, other reparse points, alternate data streams and device paths.
+- Use native Windows OpenSSH and its authentication agent service; copy public keys with `clip.exe`.
+- Support paths containing spaces and Windows drive letters without changing the switch/return workflow.
+- Add a per-user `.exe` installer that adds ghssh to PATH, a portable ZIP and SHA-256 checksums.
+- Bundle Python and Python dependencies so Windows users need no environment activation.
+- Add Linux/Windows CI and test source behavior, frozen executable, installation, upgrade and uninstall before publishing Windows downloads.
+
+Windows binaries are built on GitHub's Windows runner. Downloads are available
+only after that workflow completes successfully; this entry remains unreleased
+until the first validated build is published. Git for Windows and Windows OpenSSH
+Client are separate prerequisites. The installer does not modify existing SSH
+keys or start system services.
+
 ## v0.2.0 — 2026-10-15
 
 - Switch a repository's commit name and email together with its GitHub SSH key.

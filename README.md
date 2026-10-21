@@ -2,11 +2,11 @@
 
 **Switch GitHub accounts safely, and return to your original SSH setup with one command.**
 
-`ghssh` is a simple Linux terminal tool for managing GitHub SSH keys. Keep a separate
+`ghssh` is a terminal tool for Linux and Windows for managing GitHub SSH keys. Keep a separate
 key for each account, switch when you need to, and keep your original keys intact.
 You can also create keys, check your connection, and back up or restore your setup.
 
-**Version:** 0.2.0 · **Platform:** Linux · **Python:** 3.11+ · **License:** MIT
+**Version:** 0.3.0 (in development) · **Platforms:** Linux, Windows 10/11 x64 · **License:** MIT
 
 ```sh
 # Run inside the repository you want to work on:
@@ -19,6 +19,91 @@ walks through creating a key and adding it to your other account. The switch can
 update repository commit details along with SSH; browser login stays separate.
 
 ## Installation
+
+### Windows: install once, run from CMD or PowerShell
+
+Windows builds include Python and all Python dependencies. You do not need to
+install Python, activate an environment, or use WSL.
+
+The Windows installer is published to [GitHub Releases](https://github.com/fatdarkness6/ghssh/releases)
+only after the Windows build and installer checks pass. The first v0.3.0 Windows
+build must complete before these downloads are available.
+
+1. Install [Git for Windows](https://gitforwindows.org/) and **Windows OpenSSH Client**
+   from Windows Optional features if they are not installed already.
+2. Download `ghssh-0.3.0-windows-x64-setup.exe` from the release assets and run it.
+3. Leave **Add ghssh to my user PATH** selected.
+4. Open a **new** CMD or PowerShell window. Reopen VS Code if using its terminal.
+
+```powershell
+ghssh --version
+ghssh --help
+ghssh status
+```
+
+The installer uses `%LOCALAPPDATA%\Programs\ghssh` and updates only your user
+PATH. Installation does not require administrator privileges. Git and OpenSSH are
+separate system prerequisites; the installer does not download or alter them.
+Run ghssh in your normal user terminal.
+
+From your project directory, create a key for your other account and switch both
+SSH and future commit authorship:
+
+```powershell
+cd "C:\Users\YourName\Projects\YourProject"
+ghssh switch github_second --create --git-name "Second Account" --git-email "second@example.com" --copy
+```
+
+Add the displayed **public** key to the second GitHub account, then check it:
+
+```powershell
+ssh -T git@github.com
+# Work normally in Git or VS Code, using an SSH remote.
+ghssh switch --back
+```
+
+For later switches, omit `--create` and reuse the existing key. Both shells accept
+these single-line commands. The encrypted key can prompt for its passphrase.
+
+Windows uses `%USERPROFILE%\.ssh` for keys, configuration, state and backups.
+ghssh uses the **native Windows OpenSSH suite** in `%SystemRoot%\System32\OpenSSH`.
+Use forward slashes and double quotes for manually configured SSH identity paths,
+for example `IdentityFile "C:/Users/Your Name/.ssh/github_second"`. ghssh writes
+this format automatically. A conflicting `HOME` environment variable is refused
+so Git and native OpenSSH do not silently read different home directories.
+
+`switch` needs no running agent. `add` and `replace` load keys into the Windows
+**OpenSSH Authentication Agent** service. If that service is disabled, enable it
+once from an **Administrator PowerShell**, then retry ghssh as your normal user:
+
+```powershell
+Set-Service ssh-agent -StartupType Automatic
+Start-Service ssh-agent
+```
+
+Git for Windows can use its bundled SSH client. If you want Git and VS Code to
+share the native Windows agent, you can explicitly select native SSH for your
+repository (this is a separate Git setting):
+
+```powershell
+git config --local core.sshCommand C:/Windows/System32/OpenSSH/ssh.exe
+```
+
+Replace `C:/Windows` if your Windows directory is elsewhere. ghssh does not
+overwrite an existing `core.sshCommand`, `GIT_SSH`, HTTPS credentials or browser
+login. Custom SSH wrappers can bypass the expected configuration; check your
+Git setup if Git authenticates differently from `ghssh test`.
+
+The release also includes a portable ZIP. Extract the **whole folder**, including
+`_internal`, and run `.\ghssh.exe`; add its folder to PATH yourself if desired.
+An unsigned installer can display a Windows publisher/SmartScreen warning. The
+release provides SHA-256 checksums in `SHA256SUMS`.
+
+Upgrade by running the new installer. Uninstall through Windows Installed apps;
+the uninstaller removes the PATH entry it added and leaves SSH keys, settings and
+backups intact. Windows ARM-native, 32-bit, and macOS packages are not provided.
+
+### Linux: install with pipx
 
 Use **pipx** to install `ghssh` as a normal terminal command. pipx creates and
 manages the application's Python environment and exposes its launcher on your
@@ -145,9 +230,15 @@ Match. Split those configurations into simple explicit Host blocks first. Relati
 IdentityFile paths, `%`/environment expansion, and identities outside `~/.ssh` are
 also refused rather than guessed. `status` explains configuration ambiguity.
 
-Permissions are `700` for `~/.ssh` and backup directories, `600` for private keys,
-config, ownership state and backup files, and `644` for active public keys.
-Operations refuse symlinks, hard-linked files, unowned paths, special files and
+On Linux, permissions are `700` for `~/.ssh` and backup directories, `600` for
+private keys, config, ownership state and backup files, and `644` for active public
+keys. On Windows, ghssh uses protected current-user ACLs for generated files and
+directories, including public keys; POSIX mode bits do not protect Windows keys.
+Windows requires a local drive with Windows security support, normally NTFS;
+network shares and device namespaces are refused. Ownership is checked against
+the current user and their process token's default owner; protected files are
+assigned to the current user. Operations refuse symlinks, Windows reparse points
+(including junctions), hard-linked files, unowned paths, special files and
 path traversal. New names are basenames, never arbitrary paths. Existing target
 files are not overwritten during generation.
 
@@ -169,11 +260,13 @@ backup are retained, with an explicit error and recovery instructions. SIGKILL,
 power loss and edits by programs that ignore ghssh's lock cannot be fully rolled
 back automatically. The account running ghssh and its home directory are trusted.
 
-The tool reuses the current agent. If necessary it starts one and prints export
+On Linux, the tool reuses the current agent. If necessary it starts one and prints export
 commands for `SSH_AUTH_SOCK` and `SSH_AGENT_PID`; a child process cannot update
 your parent shell. Copy those exports to use that agent in subsequent shell
 commands. Restoring files does not alter the agent: load the restored identity
 with the displayed `ssh-add` command when ready.
+On Windows, ghssh reuses the native OpenSSH agent service and never starts a Unix
+agent or changes system service settings automatically.
 
 ## Temporarily use a second GitHub account
 
@@ -339,4 +432,30 @@ Tests use temporary homes and mock command execution. No real GitHub account,
 network access, personal keys, running agent or desktop clipboard is required.
 `Runner` is the injection point for system commands; `Layout` supplies an isolated
 home directory. Filesystem, config parsing, SSH, GitHub, backup workflows and CLI
-presentation live in separate modules. Windows and macOS are not supported yet.
+presentation live in separate modules. Native Windows security tests run on the
+Windows CI runner; macOS remains unsupported.
+
+### Building the Windows downloads
+
+[Tests](.github/workflows/ci.yml) runs on Linux and Windows with Python 3.11 and
+3.13. The [Windows installer workflow](.github/workflows/windows-release.yml)
+tests the source, exercises real local OpenSSH/Git, builds a console application
+with PyInstaller, and tests the frozen executable. Inno Setup builds the per-user
+installer, followed by installation, CMD/PowerShell/PATH, upgrade, and uninstall
+checks. These checks use disposable profiles; they do not contact GitHub or load
+keys into an agent.
+
+Pushes to `main` automatically build a Windows preview. You can also run
+**Actions → Windows installer → Run workflow**. Successful preview runs provide
+downloadable build artifacts without publishing a release.
+After reviewing that build, push a tag matching the package version, such as
+`v0.3.0`, to build and publish the installer, portable ZIP and checksums to GitHub
+Releases. Publication is gated on the Windows build and tests succeeding. The
+build job has read-only repository permissions; only the publication job can
+write release assets.
+
+Windows executables must be built on Windows; the Linux wheel is not a Windows
+executable. For a manual Windows build, install Python 3.11+ x64 and Inno Setup 6,
+then use the same commands as the workflow. `packaging/windows/ghssh.iss` keeps
+the installation identity stable across versions. No signing certificate is
+configured in this repository.
