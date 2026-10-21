@@ -40,7 +40,7 @@ jobs:
           GHSSH_RUN_INTEGRATION: '1'
         run: python -m pytest -q -m integration
       - name: Build console executable with bundled Python
-        run: python -m PyInstaller --noconfirm --clean --onedir --console --name ghssh --specpath build --collect-all typer --collect-all rich packaging/windows/launcher.py
+        run: python -m PyInstaller --noconfirm --clean --onedir --console --name ghssh --specpath build --hidden-import win32timezone --collect-all typer --collect-all rich packaging/windows/launcher.py
       - name: Test frozen executable
         run: python packaging/windows/smoke_test.py dist/ghssh/ghssh.exe
       - name: Build per-user installer
