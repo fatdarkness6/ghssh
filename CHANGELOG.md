@@ -1,6 +1,6 @@
 # Release notes
 
-## v0.3.0 — Unreleased
+## v0.3.0 — 2026-10-21
 
 - Add native Windows 10/11 support for CMD and PowerShell.
 - Use Windows file ownership checks, protected current-user ACLs and process locks.
@@ -11,11 +11,12 @@
 - Bundle Python and Python dependencies so Windows users need no environment activation.
 - Add Linux/Windows CI and test source behavior, frozen executable, installation, upgrade and uninstall before publishing Windows downloads.
 
-Windows binaries are built on GitHub's Windows runner. Downloads are available
-only after that workflow completes successfully; this entry remains unreleased
-until the first validated build is published. Git for Windows and Windows OpenSSH
-Client are separate prerequisites. The installer does not modify existing SSH
-keys or start system services.
+Windows binaries are built and tested on GitHub's Windows runner before being
+published to GitHub Releases. The checks cover native Windows permissions,
+short/long repository path aliases, the bundled executable, CMD and PowerShell,
+PATH setup, upgrades and uninstalling. Git for Windows and Windows OpenSSH Client
+are separate prerequisites. The installer does not modify existing SSH keys or
+start system services.
 
 ## v0.2.0 — 2026-10-15
 

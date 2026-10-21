@@ -6,7 +6,7 @@
 key for each account, switch when you need to, and keep your original keys intact.
 You can also create keys, check your connection, and back up or restore your setup.
 
-**Version:** 0.3.0 (in development) · **Platforms:** Linux, Windows 10/11 x64 · **License:** MIT
+**Version:** 0.3.0 · **Platforms:** Linux, Windows 10/11 x64 · **License:** MIT
 
 ```sh
 # Run inside the repository you want to work on:
@@ -25,9 +25,9 @@ update repository commit details along with SSH; browser login stays separate.
 Windows builds include Python and all Python dependencies. You do not need to
 install Python, activate an environment, or use WSL.
 
-The Windows installer is published to [GitHub Releases](https://github.com/fatdarkness6/ghssh/releases)
-only after the Windows build and installer checks pass. The first v0.3.0 Windows
-build must complete before these downloads are available.
+Download the tested Windows installer from
+[GitHub Releases](https://github.com/fatdarkness6/ghssh/releases/latest).
+The release includes the installer, a portable ZIP and SHA-256 checksums.
 
 1. Install [Git for Windows](https://gitforwindows.org/) and **Windows OpenSSH Client**
    from Windows Optional features if they are not installed already.
