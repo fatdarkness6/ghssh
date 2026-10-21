@@ -18,7 +18,7 @@ def assert_permissions(path: Path, expected: int) -> None:
     if not WINDOWS:
         assert path.stat().st_mode & 0o777 == expected
         return
-    import win32con
+    import ntsecuritycon
     import win32security
 
     from ghssh._windows import user_sid
@@ -33,9 +33,9 @@ def assert_permissions(path: Path, expected: int) -> None:
     assert acl is not None and acl.GetAceCount() == 1
     header, mask, sid = acl.GetAce(0)
     assert header[0] == win32security.ACCESS_ALLOWED_ACE_TYPE
-    assert not header[1] & win32con.INHERITED_ACE
+    assert not header[1] & win32security.INHERITED_ACE
     assert sid == user_sid()
-    assert mask == win32con.FILE_ALL_ACCESS
+    assert mask == ntsecuritycon.FILE_ALL_ACCESS
 
 
 def public_key(seed: str = "test") -> str:

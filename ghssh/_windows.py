@@ -7,6 +7,7 @@ import os
 from functools import wraps
 from pathlib import Path
 
+import ntsecuritycon
 import pywintypes
 import win32api
 import win32con
@@ -30,18 +31,24 @@ def checked_api(function):
 
 
 def user_sid():
-    with win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY) as token:
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+    try:
         return win32security.GetTokenInformation(token, win32security.TokenUser)[0]
+    finally:
+        token.Close()
 
 
 def caller_owns(sid) -> bool:
-    with win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY) as token:
+    token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
+    try:
         # Elevated Windows tokens may create files owned by their default owner
         # group. Accept only this token's owner, never arbitrary administrator SIDs.
         return sid in (
             win32security.GetTokenInformation(token, win32security.TokenUser)[0],
             win32security.GetTokenInformation(token, win32security.TokenOwner),
         )
+    finally:
+        token.Close()
 
 
 @checked_api
@@ -95,7 +102,7 @@ def secure(path: Path, *, directory: bool, fd: int | None = None) -> None:
         raise OSError(f"Refusing an unowned path: {path}")
     dacl = win32security.ACL()
     inheritance = win32con.OBJECT_INHERIT_ACE | win32con.CONTAINER_INHERIT_ACE if directory else 0
-    dacl.AddAccessAllowedAceEx(win32security.ACL_REVISION, inheritance, win32con.FILE_ALL_ACCESS, user_sid())
+    dacl.AddAccessAllowedAceEx(win32security.ACL_REVISION, inheritance, ntsecuritycon.FILE_ALL_ACCESS, user_sid())
     flags = (
         win32security.OWNER_SECURITY_INFORMATION
         | win32security.DACL_SECURITY_INFORMATION
@@ -124,7 +131,7 @@ def open_checked(path: Path, flags: int) -> int:
         win32con.FILE_SHARE_READ | win32con.FILE_SHARE_WRITE | win32con.FILE_SHARE_DELETE,
         None,
         creation,
-        win32con.FILE_FLAG_OPEN_REPARSE_POINT,
+        win32file.FILE_FLAG_OPEN_REPARSE_POINT,
         None,
     )
     try:

@@ -146,7 +146,7 @@ def test_native_runner_uses_windows_openssh(monkeypatch):
 
 @native
 def test_native_rollback_restores_acl(manager):
-    import win32con
+    import ntsecuritycon
     import win32security
 
     from ghssh._windows import user_sid
@@ -156,9 +156,9 @@ def test_native_rollback_restores_acl(manager):
     path = manager.layout.config
     atomic_write(manager.layout, path, b"original")
     acl = win32security.ACL()
-    acl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.FILE_ALL_ACCESS, user_sid())
+    acl.AddAccessAllowedAce(win32security.ACL_REVISION, ntsecuritycon.FILE_ALL_ACCESS, user_sid())
     acl.AddAccessAllowedAce(
-        win32security.ACL_REVISION, win32con.FILE_GENERIC_READ,
+        win32security.ACL_REVISION, ntsecuritycon.FILE_GENERIC_READ,
         win32security.CreateWellKnownSid(win32security.WinLocalSystemSid, None),
     )
     win32security.SetNamedSecurityInfo(
