@@ -90,6 +90,10 @@ class Layout:
         return self.ssh / "ghssh-switch.json"
 
     @property
+    def accounts(self) -> Path:
+        return self.ssh / "ghssh-accounts.json"
+
+    @property
     def backups(self) -> Path:
         return self.ssh / "ghssh-backups"
 

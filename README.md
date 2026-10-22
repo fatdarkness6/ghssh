@@ -1,22 +1,29 @@
 # ghssh
 
-**Switch GitHub accounts safely, and return to your original SSH setup with one command.**
+**Save your GitHub accounts once. Switch by name, with the right commit identity.**
 
-`ghssh` is a terminal tool for Linux and Windows for managing GitHub SSH keys. Keep a separate
-key for each account, switch when you need to, and keep your original keys intact.
-You can also create keys, check your connection, and back up or restore your setup.
+`ghssh` is a Python terminal tool for Linux and Windows. Give each GitHub account
+a nickname, connect it to its SSH key, and save its commit name/email. Switch
+between two, three, or more accounts without typing the details again.
 
-**Version:** 0.3.0 · **Platforms:** Linux, Windows 10/11 x64 · **License:** MIT
+**Version:** 0.4.0 · **Platforms:** Linux, Windows 10/11 x64 · **License:** MIT
 
 ```sh
-# Run inside the repository you want to work on:
-ghssh switch github_second  # Prompts for the other account's commit name/email.
-ghssh switch --back         # Restore the previous SSH and commit settings.
+ghssh add arsam     # Guided setup: reuse your current key and save commit details.
+ghssh add arvand    # Reuse another key, or create a separate one.
+ghssh add work      # Add as many accounts as you need.
+# From your Git project:
+ghssh switch arvand
+ghssh switch work
+ghssh switch arsam
 ```
 
-New to SSH keys? The [second-account guide](#temporarily-use-a-second-github-account)
-walks through creating a key and adding it to your other account. The switch can
-update repository commit details along with SSH; browser login stays separate.
+No `--back` is needed for saved accounts. Setup does not change the active account.
+`switch NAME` selects the saved SSH key for github.com and sets the saved commit
+name/email **only in the selected repository**. Browser and HTTPS logins are separate.
+
+New to SSH? Run **`ghssh guide`** for a step-by-step walkthrough, or read the
+[account setup guide](#set-up-your-accounts-once) below.
 
 ## Installation
 
@@ -31,7 +38,7 @@ The release includes the installer, a portable ZIP and SHA-256 checksums.
 
 1. Install [Git for Windows](https://gitforwindows.org/) and **Windows OpenSSH Client**
    from Windows Optional features if they are not installed already.
-2. Download `ghssh-0.3.0-windows-x64-setup.exe` from the release assets and run it.
+2. Download `ghssh-0.4.0-windows-x64-setup.exe` from the release assets and run it.
 3. Leave **Add ghssh to my user PATH** selected.
 4. Open a **new** CMD or PowerShell window. Reopen VS Code if using its terminal.
 
@@ -46,24 +53,20 @@ PATH. Installation does not require administrator privileges. Git and OpenSSH ar
 separate system prerequisites; the installer does not download or alter them.
 Run ghssh in your normal user terminal.
 
-From your project directory, create a key for your other account and switch both
-SSH and future commit authorship:
+The account setup and switch commands are identical in CMD and PowerShell:
 
 ```powershell
+ghssh guide
+ghssh add arsam --key id_ed25519
+ghssh add arvand
 cd "C:\Users\YourName\Projects\YourProject"
-ghssh switch github_second --create --git-name "Second Account" --git-email "second@example.com" --copy
+ghssh switch arvand
+ghssh switch arsam
 ```
 
-Add the displayed **public** key to the second GitHub account, then check it:
-
-```powershell
-ssh -T git@github.com
-# Work normally in Git or VS Code, using an SSH remote.
-ghssh switch --back
-```
-
-For later switches, omit `--create` and reuse the existing key. Both shells accept
-these single-line commands. The encrypted key can prompt for its passphrase.
+Setup asks for each account's commit name and verified email. For a newly created
+key, paste the displayed **public** key into that account's GitHub SSH key settings
+before switching. Test the selected username with `ssh -T git@github.com`.
 
 Windows uses `%USERPROFILE%\.ssh` for keys, configuration, state and backups.
 ghssh uses the **native Windows OpenSSH suite** in `%SystemRoot%\System32\OpenSSH`.
@@ -72,7 +75,7 @@ for example `IdentityFile "C:/Users/Your Name/.ssh/github_second"`. ghssh writes
 this format automatically. A conflicting `HOME` environment variable is refused
 so Git and native OpenSSH do not silently read different home directories.
 
-`switch` needs no running agent. `add` and `replace` load keys into the Windows
+`add NAME` and `switch NAME` need no running agent. Key rotation with `replace` loads the new key into the Windows
 **OpenSSH Authentication Agent** service. If that service is disabled, enable it
 once from an **Administrator PowerShell**, then retry ghssh as your normal user:
 
@@ -170,60 +173,168 @@ Only this manually managed alternative needs activation or the full executable
 path. Installing the application with pipx does not require root; the `sudo apt`
 commands above are only for installing system prerequisites.
 
-## Usage
+## Everyday commands
+
+| Command | What to use it for |
+| --- | --- |
+| `ghssh guide` | Read setup instructions and copyable examples |
+| `ghssh add NAME` | Save a nickname, SSH key and commit name/email; reuse or create a key |
+| `ghssh accounts` | List saved names, keys and commit details; show the selected SSH key |
+| `ghssh switch NAME` | Select a saved key and commit identity in the current Git project |
+| `ghssh switch NAME --repo PATH` | Select the commit identity in a specific project |
+| `ghssh switch NAME --ssh-only` | Select SSH only, including outside a Git project |
+| `ghssh status` | Inspect SSH and the current project's effective commit identity |
+| `ghssh test` | Test noninteractive GitHub SSH authentication |
+| `ghssh list` | Inspect detected key files, fingerprints and agent identities |
+| `ghssh forget NAME` | Forget a nickname while keeping its key files and current settings |
+| `ghssh replace` | Rotate the currently selected key; update its saved profile and keep the old key |
+| `ghssh backup` | Back up the current GitHub SSH setup |
+| `ghssh restore --list` | List SSH backup IDs; restore with `ghssh restore ID` |
+| `ghssh remove --config-only` | Remove the GitHub SSH block while keeping keys and profiles |
+
+Run `ghssh COMMAND --help` for that command's options and examples. Use
+`--dry-run` on add, switch, forget, replace, remove, backup or restore to preview
+without changing files, permissions, agents, the clipboard or GitHub. Use
+`--yes` / `-y` to confirm setup or maintenance without a confirmation prompt.
+Named switches apply immediately; they need no extra confirmation.
+`ghssh --verbose COMMAND` adds error context.
+
+## Set up your accounts once
+
+### 1. Save the account you already use
+
+If you have an existing key such as `~/.ssh/id_ed25519`, reuse it:
 
 ```sh
-ghssh status
-ghssh add --email user@example.com
-ghssh add --github --copy
-ghssh list
-ghssh test
-ghssh replace --dry-run
-ghssh replace --github
-ghssh backup
-ghssh restore --list
-ghssh restore 2026-10-15_09-30-00_ab12cd34 --dry-run
-ghssh restore 2026-10-15_09-30-00_ab12cd34
-ghssh remove --config-only
-ghssh remove --delete-key
+ghssh add arsam --key id_ed25519
 ```
 
-`add` prompts for a basename within `~/.ssh`, defaulting to `github_ed25519`.
-`replace` chooses a fresh timestamped name and keeps both the previous local key
-and its remote GitHub registration. An existing destination is always refused;
-choose a different `--key-name`. `--email` and `--comment` are aliases.
+Enter the commit name and email belonging to that GitHub account. Use an email
+verified on that account, or its GitHub noreply address. The nickname `arsam` is
+just a local label; it does not have to match your GitHub username. Names accept
+letters, numbers, underscores and hyphens, and are stored in lowercase.
 
-OpenSSH prompts directly for a passphrase, keeping it out of Python, logs and
-process arguments. Use a terminal for this prompt. Unattended creation requires
-the explicit `--no-passphrase` option, which produces an **unencrypted** private
-key. `--yes`/`-y` confirms local changes; it does not select a backup, bypass path
-checks, or bypass the separate remote deletion confirmation.
+If you are unsure which key you have, run `ghssh list`, or just `ghssh add` to
+start the wizard. It lists detected private-key filenames and asks for a nickname.
+Reusing a key preserves its contents, permissions and ownership registry status;
+it does not claim an imported key as generated by ghssh.
 
-| Command | Action |
-| --- | --- |
-| `add` | Create Ed25519 key pair, load agent, configure GitHub, show public key |
-| `replace` | Back up existing setup and switch to a newly generated key |
-| `switch KEY` / `switch --back` | Temporarily switch SSH and repository commit identity, then restore both |
-| `remove` | Remove GitHub block; optionally delete a verified owned key pair |
-| `list` | Show detected private/public pairs, roles, fingerprints and agent identities |
-| `status` | Inspect directory, config, key pair, agent and GitHub CLI authentication |
-| `test` | Run SSH authentication test, recognizing GitHub's successful exit status 1 |
-| `backup` | Save current GitHub setup and metadata |
-| `restore` | List/select a backup and safely restore its GitHub setup |
+### 2. Save another account
 
-Creation, replacement, switching, removal, backup and restore support `--dry-run`. The plan
-includes target files, permissions, agent actions and remote operations. A dry run
-does not create directories, change permissions, start agents, invoke clipboard
-helpers or modify GitHub. Timestamped backup IDs are allocated only on execution.
-Read-only inspection commands (including GitHub API checks with `--github`) may run.
-`ghssh --verbose COMMAND` adds error context; every command supports `--help`.
+```sh
+ghssh add arvand
+```
+
+At the key question, enter its existing private-key filename, or press Enter to
+create a new Ed25519 pair at `~/.ssh/github_arvand`. Enter that account's commit
+name/email. Existing destination files are never overwritten. `--key-name FILE`
+chooses another filename for a **new** key; `--key FILE` reuses an existing one.
+
+A **passphrase** is a password protecting the private key on your computer.
+OpenSSH asks for it directly in your terminal; ghssh never stores the passphrase.
+For unattended creation only, `--no-passphrase` explicitly creates an unencrypted
+key. It is not used when reusing an existing key.
+
+For a new key, sign into the **matching GitHub account** and paste the displayed
+**public key** at [Settings → SSH and GPG keys → New SSH key](https://github.com/settings/ssh/new),
+choosing Authentication Key. Add `--copy` to copy it during setup. Keep the
+private key private. Registering the public key determines which GitHub account
+the key authenticates as; a nickname or email alone cannot change that.
+
+Repeat with `ghssh add work` for a third account, and any other names you need.
+Saving a profile does not change active SSH settings, Git settings or the agent.
+Profiles are stored privately in `~/.ssh/ghssh-accounts.json` (Windows:
+`%USERPROFILE%\.ssh\ghssh-accounts.json`). Each profile contains a key basename,
+fingerprint, commit name and email; it contains no private-key bytes or passphrase.
+The same key cannot be assigned to different account nicknames.
+
+Fully specified, unattended examples (the first reuses a key; the second creates one):
+
+```sh
+ghssh add arsam --key id_ed25519 --git-name "Arsam" --git-email "arsam@example.com" --yes
+ghssh add arvand --git-name "Arvand" --git-email "arvand@example.com" --no-passphrase --yes
+```
+
+### 3. Switch from your Git project
+
+```sh
+cd /path/to/your/project
+ghssh accounts
+ghssh switch arvand
+ssh -T git@github.com
+ghssh status
+# Work normally in Git or VS Code.
+ghssh switch work
+ghssh switch arsam
+```
+
+On Windows, use your own project path, such as `cd "C:\Users\YourName\Projects\YourProject"`.
+The switch commands are the same in Linux shells, CMD and PowerShell. You do not
+need `--create`, repeated commit details or `--back` with saved names. Selecting
+the same account again is allowed, including when configuring another project.
+
+Use an **SSH remote**, such as `git@github.com:OWNER/REPOSITORY.git`. Check with
+`git remote -v`. SSH key selection does not affect HTTPS authentication.
+GitHub's SSH greeting identifies the account selected by your key. `ghssh status`
+shows the effective commit email in your project. These are separate settings;
+named switching updates both. Encrypted keys can prompt for their passphrase
+when you use interactive SSH or Git. `ghssh test` uses BatchMode and cannot ask
+for a passphrase; use `ssh -T git@github.com` to test interactively.
+
+```sh
+ghssh switch arvand --dry-run
+ghssh switch arvand --repo /path/to/another/project
+ghssh switch arvand --ssh-only
+```
+
+**Scope:** the github.com SSH selection applies across repositories using this
+SSH configuration. Commit identity changes affect future commits only in the
+selected repository, including VS Code commits. Other repositories' local Git
+settings, global Git settings and existing commits are preserved. Browser
+sessions, GitHub CLI (`gh`) logins and HTTPS credentials are separate.
+
+Each switch creates a safety backup and checks the saved key fingerprint. SSH
+and Git edits are locked and rolled back together on failure. Unrelated Git
+settings are preserved. Local Include/IncludeIf settings and explicit author,
+committer or environment overrides are refused. Linked worktrees need
+`extensions.worktreeConfig` so their commit identities can be scoped separately.
+
+To correct saved details, run `ghssh forget NAME`, then `ghssh add NAME --key KEY`
+and enter the corrected details. Forgetting keeps all keys, active settings and
+backups. `replace` updates a saved profile when rotating its selected key. A
+saved profile protects its key from `remove --delete-key`; forget the nickname
+first if you really want to delete a ghssh-generated pair.
+
+### Upgrading from temporary switching (v0.1–v0.3)
+
+If `ghssh status` shows an older temporary switch, finish it **once**:
+
+```sh
+ghssh switch --back
+```
+
+Register the existing keys under names; do not generate replacements unnecessarily:
+
+```sh
+ghssh add arsam --key id_ed25519
+ghssh add arvand --key github_second
+ghssh switch arvand
+ghssh switch arsam
+```
+
+Old `ghssh switch KEY --create ...` and `ghssh switch --back` commands remain
+compatible for existing scripts and return points. They retain the one-level
+temporary workflow. A saved nickname takes precedence over a matching key filename.
+The new `add` command saves an account rather than immediately configuring SSH;
+`--email` on `add` is an alias for the saved **commit email**. For raw key rotation,
+`replace --email` remains a public-key comment.
 
 ## SSH configuration and security model
 
 The tool edits a single explicit `Host github.com` block and preserves unrelated
 Host blocks and comments. It sets HostName github.com, User git, a quoted absolute
 IdentityFile, and IdentitiesOnly yes. It never rewrites unrelated settings from a
-whole-file snapshot. This first release deliberately refuses mutation when it
+whole-file snapshot. ghssh refuses mutation when it
 finds duplicate GitHub blocks, a shared GitHub Host block, identity-bearing
 wildcards affecting GitHub, conflicting global identity settings, Include, or
 Match. Split those configurations into simple explicit Host blocks first. Relative
@@ -231,7 +342,7 @@ IdentityFile paths, `%`/environment expansion, and identities outside `~/.ssh` a
 also refused rather than guessed. `status` explains configuration ambiguity.
 
 On Linux, permissions are `700` for `~/.ssh` and backup directories, `600` for
-private keys, config, ownership state and backup files, and `644` for active public
+private keys, config, saved accounts, ownership state and backup files, and `644` for active public
 keys. On Windows, ghssh uses protected current-user ACLs for generated files and
 directories, including public keys; POSIX mode bits do not protect Windows keys.
 Windows requires a local drive with Windows security support, normally NTFS;
@@ -260,106 +371,13 @@ backup are retained, with an explicit error and recovery instructions. SIGKILL,
 power loss and edits by programs that ignore ghssh's lock cannot be fully rolled
 back automatically. The account running ghssh and its home directory are trusted.
 
-On Linux, the tool reuses the current agent. If necessary it starts one and prints export
+For key rotation on Linux, the tool reuses the current agent. If necessary it starts one and prints export
 commands for `SSH_AUTH_SOCK` and `SSH_AGENT_PID`; a child process cannot update
 your parent shell. Copy those exports to use that agent in subsequent shell
 commands. Restoring files does not alter the agent: load the restored identity
 with the displayed `ssh-add` command when ready.
 On Windows, ghssh reuses the native OpenSSH agent service and never starts a Unix
 agent or changes system service settings automatically.
-
-## Temporarily use a second GitHub account
-
-Use `switch` for account changes. Keep `replace` for permanent key rotation.
-Run it from the Git repository you want to work on, or select one with `--repo`.
-The first time, create a separate key while saving a return point:
-
-```sh
-ghssh switch github_second --create --email "second@example.com" --copy \
-  --git-name "Second Account" --git-email "second@example.com"
-```
-
-This retains the original key, creates `~/.ssh/github_second`, backs up the current
-setup, temporarily selects the second key for `github.com`, and sets the selected
-repository's `user.name` and `user.email`. It also works if
-the original account uses a default key such as `id_ed25519` with no explicit
-GitHub Host block. Enter a passphrase when OpenSSH asks.
-
-Sign into the **second** account in your browser and add the displayed public key
-at [GitHub's SSH key settings](https://github.com/settings/ssh/new). The email is
-just a key comment. `--git-email` separately sets the commit author email and must
-be verified on the target account (its GitHub noreply address is also supported).
-The GitHub account where you register the public key determines which account
-authenticates. `switch` does not use the current `gh` login to upload anything.
-
-```sh
-ssh -T git@github.com  # Check that GitHub greets the second account's username.
-# Use normal Git commands with SSH remotes: git@github.com:OWNER/REPO.git
-ghssh switch --back
-ssh -T git@github.com  # Check that your original account is back.
-```
-
-For later switches, reuse the existing second key:
-
-```sh
-ghssh switch github_second --git-name "Second Account" --git-email "second@example.com"
-# Work with your second account.
-ghssh switch --back
-```
-
-If you already have the second account's key, start directly with
-`ghssh switch EXISTING_KEY_BASENAME`; `--create` is only needed once. Interactive
-switches prompt for missing commit name/email. With `--yes` or `--dry-run`, provide
-both values explicitly. Existing destination keys are never overwritten.
-
-To select a repository while running from another directory:
-
-```sh
-ghssh switch github_second --repo /path/to/your/repository \
-  --git-name "Second Account" --git-email "second@example.com" --dry-run
-```
-
-For an SSH-only switch, including when outside a Git repository:
-
-```sh
-ghssh switch github_second --ssh-only
-ghssh switch --back
-```
-
-Switching changes the GitHub SSH configuration and, unless `--ssh-only` is used,
-the selected repository's commit name/email. It leaves existing key files and loaded
-agent identities alone and disables automatic agent additions for the temporary
-GitHub block. An encrypted alternate key may prompt for its passphrase during
-normal Git operations. Use the interactive `ssh -T` check above; `ghssh test` uses
-BatchMode, which cannot prompt for a key that is not loaded in an agent. Conflicting
-global or wildcard AddKeysToAgent settings are refused for temporary switches.
-
-The return point is stored privately in `~/.ssh/ghssh-switch.json` and survives
-terminal restarts. Return restores the previous GitHub section while keeping
-changes to unrelated Host blocks. It checks the previous key's fingerprint and
-refuses to overwrite a GitHub block changed externally during the switch. A safety
-backup is created in both directions. Switches have one return point: return before
-starting another switch. Replacement, removal and backup restoration are blocked
-while a temporary switch is active, protecting that return point.
-
-Commit name/email changes affect future commits in the selected repository,
-including normal commits made in VS Code. They never change global settings or
-rewrite existing commits. On return, previous local values are restored; if those
-values were absent, the overrides are removed so Git inherits its current defaults.
-Unrelated Git config edits made during the switch are preserved. A changed commit
-identity is treated as a conflict and stops automatic return. The safety backup
-includes `git-identity.json` containing the saved author fields for manual recovery.
-
-Only one repository's commit settings are selected, while the `github.com` SSH
-selection applies to normal SSH connections from all repositories. Browser
-sessions, `gh` authentication and HTTPS credentials remain independent. Local
-Include/IncludeIf directives and explicit author/committer overrides require manual
-identity management; environment overrides that bypass the selected identity are
-also refused. Linked worktrees require `extensions.worktreeConfig` to be enabled
-so each worktree can have its own identity.
-
-Saved SSH-only return points from v0.1.0 still work and restore only SSH settings.
-Finish any existing switch before starting a new combined SSH/commit switch.
 
 ## Backups and recovery
 
@@ -388,6 +406,10 @@ is restored; unrelated Host blocks keep their current contents. Confirmed restor
 can overwrite the displayed original key paths; it refuses targets referenced by
 other configured hosts. A backup of a missing private key remains useful for
 manual recovery but cannot be automatically restored as a complete setup.
+
+SSH backups restore the current GitHub SSH section and key, not the named-account
+registry or commit settings. Keep a separate protected copy of `ghssh-accounts.json`
+if you need to recover saved names.
 
 No command deletes old backups or old keys left by replacement. Review those
 manually after verifying that the new key works everywhere it is needed.
@@ -449,7 +471,7 @@ Pushes to `main` automatically build a Windows preview. You can also run
 **Actions → Windows installer → Run workflow**. Successful preview runs provide
 downloadable build artifacts without publishing a release.
 After reviewing that build, push a tag matching the package version, such as
-`v0.3.0`, to build and publish the installer, portable ZIP and checksums to GitHub
+`v0.4.0`, to build and publish the installer, portable ZIP and checksums to GitHub
 Releases. Publication is gated on the Windows build and tests succeeding. The
 build job has read-only repository permissions; only the publication job can
 write release assets.

@@ -25,7 +25,10 @@ def test_help_and_version():
 def test_dry_run_absent_ssh_no_writes(manager, monkeypatch, command):
     monkeypatch.setattr(cli, "Manager", lambda: manager)
     before = snapshot(manager.layout.home)
-    result = runner.invoke(cli.app, [command, "--dry-run"])
+    args = [command, "--dry-run"]
+    if command == "add":
+        args += ["arsam", "--git-name", "Arsam", "--git-email", "me@example.com"]
+    result = runner.invoke(cli.app, args)
     assert result.exit_code == 0, result.output
     assert snapshot(manager.layout.home) == before
     assert all(call[0][0] == "ssh" and "-G" in call[0] for call in manager.runner.calls)
@@ -70,12 +73,15 @@ def test_restore_dry_run_no_side_effects(configured, monkeypatch):
 def test_add_end_to_end_mocked(manager, monkeypatch):
     monkeypatch.setattr(cli, "Manager", lambda: manager)
     result = runner.invoke(
-        cli.app, ["add", "--yes", "--no-passphrase", "--email", "me@example.com"]
+        cli.app, ["add", "arsam", "--yes", "--no-passphrase", "--git-name", "Arsam", "--email", "me@example.com"]
     )
     assert result.exit_code == 0, result.output
     assert "PUBLIC key" in result.output
     assert "BEGIN OPENSSH PRIVATE KEY" not in result.output
-    assert manager.config.read().identity(manager.layout).name == "github_ed25519"
+    from ghssh.account_manager import AccountManager
+
+    assert AccountManager(manager).read()["arsam"].key == "github_arsam"
+    assert not manager.layout.config.exists()
 
 
 def test_cancel_leaves_files_untouched(configured, monkeypatch):

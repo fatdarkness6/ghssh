@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from ghssh.account_manager import AccountManager
 from ghssh.manager import Manager
 from ghssh.platform_support import secure_mode
 from ghssh.switch_manager import SwitchManager
@@ -57,3 +58,32 @@ def test_real_switch_with_spaces_and_restore(tmp_path, monkeypatch):
     assert original.is_file() and (manager.layout.ssh / "github_second").is_file()
     secure_mode(repository / ".git/config", 0o600)
     assert Path(str(original) + ".pub").is_file()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    os.environ.get("GHSSH_RUN_INTEGRATION") != "1", reason="opt-in real OpenSSH/Git check"
+)
+def test_real_named_account_cycle_with_spaces(tmp_path, monkeypatch):
+    home = tmp_path / "named profile with spaces"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    for key in tuple(os.environ):
+        if key.startswith("GIT_"):
+            monkeypatch.delenv(key)
+    manager = Manager(Layout(home))
+    accounts = AccountManager(manager)
+    runner = Runner()
+    runner.run(["git", "init", "--quiet", str(home)])
+    for name in ("arsam", "arvand", "work"):
+        accounts.add(name, name.title(), f"{name}@example.com", no_passphrase=True)
+    assert not manager.layout.config.exists()
+    for name in ("arsam", "arvand", "work", "arsam"):
+        accounts.switch(name, repository=home)
+        effective = runner.run(["ssh", "-G", "-F", str(manager.layout.config), "github.com"]).stdout
+        assert (manager.layout.ssh / f"github_{name}").as_posix() in effective
+        runner.run(["git", "-C", str(home), "commit", "--quiet", "--allow-empty", "-m", name])
+        identity = runner.run(["git", "-C", str(home), "log", "-1", "--format=%an <%ae>"]).stdout.strip()
+        assert identity == f"{name.title()} <{name}@example.com>"
+        assert not manager.layout.switch_state.exists()

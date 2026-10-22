@@ -58,6 +58,35 @@ def main() -> None:
         assert not (home / ".ssh/config").exists()
         assert not (home / ".ssh/ghssh-switch.json").exists()
         assert key.is_file(), "Returning deleted the alternate key"
+        # Exercise the same persistent profiles through the frozen launcher and
+        # the installed CMD/PowerShell path (test_installer.ps1 calls this script).
+        run(str(executable), "guide")
+        for name in ("arsam", "arvand", "work"):
+            args = [
+                str(executable), "add", name, "--git-name", name.title(),
+                "--git-email", f"{name}@example.com", "--yes",
+            ]
+            if name == "arvand":
+                args += ["--key", "github_second"]
+            else:
+                args += ["--no-passphrase"]
+            run(*args)
+        assert not (home / ".ssh/config").exists(), "Adding profiles switched SSH"
+        assert run("git", "config", "user.email").strip() == "original@example.com"
+        for name in ("arsam", "arvand", "work", "arsam"):
+            run(str(executable), "switch", name)
+            assert run("git", "config", "user.email").strip() == f"{name}@example.com"
+            run("git", "commit", "--quiet", "--allow-empty", "-m", name)
+            assert run("git", "log", "-1", "--format=%ae").strip() == f"{name}@example.com"
+            assert not (home / ".ssh/ghssh-switch.json").exists()
+        saved_config = (home / ".ssh/config").read_bytes()
+        saved_git = (home / ".git/config").read_bytes()
+        run(str(executable), "switch", "work", "--dry-run")
+        assert (home / ".ssh/config").read_bytes() == saved_config
+        assert (home / ".git/config").read_bytes() == saved_git
+        assert "arsam" in run(str(executable), "accounts")
+        run(str(executable), "forget", "work", "--yes")
+        assert (home / ".ssh/github_work").is_file(), "Forgetting a profile deleted its key"
     print("Frozen CLI smoke checks passed (no network or agent changes).")
 
 

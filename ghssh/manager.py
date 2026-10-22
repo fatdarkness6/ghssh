@@ -32,7 +32,10 @@ class Manager:
 
     def ensure_not_switching(self) -> None:
         if self.layout.checked(self.layout.switch_state).exists():
-            raise GhsshError("A temporary account switch is active. Run ghssh switch --back first.")
+            raise GhsshError(
+                "An older temporary switch is active. Run ghssh switch --back once to finish it. "
+                "Then use ghssh add NAME and ghssh switch NAME; named accounts need no --back."
+            )
 
     def inspect(self) -> tuple[SSHConfig, Path | None]:
         config = self.config.read()
@@ -55,6 +58,8 @@ class Manager:
         no_passphrase: bool = False,
         expected_config: str | None = None,
     ) -> Change:
+        from .account_manager import AccountManager
+
         self.ensure_not_switching()
         path = self.ssh.key_path(name)
         config, old = self.inspect()
@@ -71,6 +76,8 @@ class Manager:
         new_config = config.upsert(self.identity_value(path))
         self.ssh.validate_config(new_config)
         self.ssh.registry()
+        profiles = AccountManager(self)
+        _, accounts_before = profiles._read()
         with locked(self.layout):
             self.ensure_not_switching()
             if self.config.read().text != config.text:
@@ -78,7 +85,7 @@ class Manager:
             self.ssh.available(path)
             # Even add preserves a pre-existing GitHub block and its options.
             backup = self.backups.create(config) if config.target() else None
-            paths = [path, Path(str(path) + ".pub"), self.layout.config, self.layout.state]
+            paths = [path, Path(str(path) + ".pub"), self.layout.config, self.layout.state, self.layout.accounts]
             with Transaction(self.layout, paths) as transaction:
                 attempted_agent_add = False
                 try:
@@ -91,6 +98,8 @@ class Manager:
                     transaction.mark(self.layout.config)
                     self.ssh.record(path, fingerprint)
                     transaction.mark(self.layout.state)
+                    if old and profiles.rotate(old, path, fingerprint, accounts_before):
+                        transaction.mark(self.layout.accounts)
                     if self.config.read().identity(self.layout) != path:
                         raise GhsshError("Post-write config validation failed.")
                 except BaseException as original:
@@ -106,6 +115,14 @@ class Manager:
         return Change(old, path, backup)
 
     def can_delete(self, config: SSHConfig, key: Path) -> None:
+        from .account_manager import AccountManager
+
+        for name, account in AccountManager(self).read().items():
+            if self.ssh.key_path(account.key) == key:
+                raise GhsshError(
+                    f"Key belongs to saved account '{name}'. Use --config-only to keep it, "
+                    f"or ghssh forget {name} before deleting its files."
+                )
         self.layout.checked(key, exists=True)
         self.layout.checked(Path(str(key) + ".pub"))
         if config.references_elsewhere(key, self.layout):

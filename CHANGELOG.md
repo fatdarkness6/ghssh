@@ -1,5 +1,22 @@
 # Release notes
 
+## v0.4.0 — 2026-10-22
+
+- Save any number of GitHub accounts with friendly nicknames: `ghssh add arsam`.
+- Reuse existing SSH keys or create separate keys in a guided setup, and save each account's commit name and verified email once.
+- Switch directly with `ghssh switch arsam`, `ghssh switch arvand`, or any other saved name; named switches need no `--back`.
+- Select the saved SSH key and repository-local commit identity together; preview with `--dry-run` or explicitly select `--ssh-only`.
+- Add `ghssh accounts`, `ghssh forget NAME`, and a step-by-step `ghssh guide`.
+- Rewrite help around setup, examples, commit identity, passphrases, SSH remotes, and the scope of account switching.
+- Protect saved profiles with private permissions, fingerprint checks, locking and atomic writes; update saved key references during rotation.
+- Keep existing temporary key/return-point commands compatible. Finish an old active switch once with `ghssh switch --back` before using named switching.
+- Exercise three-account switches and actual commit attribution on Linux and Windows, including the frozen executable and installed application.
+
+`add` now saves an account without changing active SSH/Git settings or loading an
+agent. After registering its public key on the correct GitHub account, run
+`ghssh switch NAME` inside the project. Names are case-insensitive and stored
+lowercase. Existing keys, global Git settings and old commits are preserved.
+
 ## v0.3.0 — 2026-10-21
 
 - Add native Windows 10/11 support for CMD and PowerShell.

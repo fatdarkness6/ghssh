@@ -19,6 +19,7 @@ from rich.text import Text
 
 from . import __version__
 from . import platform_support as platform
+from .account_manager import AccountManager, account_name
 from .manager import Change, Manager
 from .switch_manager import SwitchManager
 from .utils import GhsshError
@@ -33,7 +34,20 @@ if platform.WINDOWS:
 app = typer.Typer(
     no_args_is_help=True,
     invoke_without_command=True,
-    help="Safely manage GitHub SSH and commit identities on Linux and Windows.",
+    help=(
+        "Switch between any number of GitHub accounts on Linux and Windows. "
+        "Save a nickname, SSH key and commit identity once, then switch by name.\n\n"
+        "Start here: ghssh add arsam (guided setup; reuse a key or create one). "
+        "Repeat for arvand or any other account.\n\n"
+        "Inside your Git project: ghssh switch arsam. "
+        "This selects the SSH key and the name/email for future commits in that project. "
+        "Use ghssh accounts to see your saved names."
+    ),
+    epilog=(
+        "Examples: ghssh add arsam | ghssh add arvand | ghssh switch arvand | "
+        "ghssh switch arsam. For step-by-step instructions: ghssh guide. "
+        "For command options and examples: ghssh COMMAND --help."
+    ),
 )
 console = Console(markup=False, highlight=False)
 VERBOSE = False
@@ -70,7 +84,9 @@ def main(
     verbose: Annotated[
         bool, typer.Option("--verbose", "-v", help="Show additional error context.")
     ] = False,
-    version: Annotated[bool, typer.Option("--version", is_eager=True)] = False,
+    version: Annotated[
+        bool, typer.Option("--version", is_eager=True, help="Show the installed version and exit.")
+    ] = False,
 ) -> None:
     """Manage GitHub SSH keys without disturbing unrelated SSH identities."""
     global VERBOSE
@@ -274,16 +290,53 @@ def create_key(
     publish(manager, key, github, copy, account)
 
 
-@app.command()
+@app.command(rich_help_panel="Getting started")
+def guide() -> None:
+    """Read a step-by-step account setup and switching guide with copyable examples."""
+    console.print("1. Save your first account: ghssh add arsam")
+    console.print("   Enter a nickname, your existing private-key filename (e.g. id_ed25519),")
+    console.print("   and the commit name/email belonging to that GitHub account.")
+    console.print("2. Save the next account: ghssh add arvand")
+    console.print("   Reuse its key, or press Enter at the key question to create a separate one.")
+    console.print("   A passphrase is a password protecting the private key. OpenSSH prompts securely.")
+    console.print("   Paste the displayed PUBLIC key into the matching account's SSH key settings:")
+    console.print("   https://github.com/settings/ssh/new (Authentication Key). Keep the private key private.")
+    console.print("3. Open your existing Git project: cd PATH_TO_YOUR_PROJECT")
+    console.print("   Use an SSH remote, e.g. git@github.com:OWNER/REPOSITORY.git. Check: git remote -v")
+    console.print("4. Choose an account: ghssh switch arvand")
+    console.print("   SSH uses its saved key; future commits in this project use its saved name/email.")
+    console.print("   Check the username: ssh -T git@github.com. Check commit settings: ghssh status")
+    console.print("5. Change anytime: ghssh switch arsam")
+    console.print("   Three or more accounts work the same way. No --back is needed for saved accounts.")
+    console.print("Useful: ghssh accounts | ghssh list | ghssh add --help | ghssh switch --help")
+    console.print("Preview: ghssh switch arvand --dry-run. Another project: ghssh switch arvand --repo PATH")
+    console.print("Outside a Git project: ghssh switch arvand --ssh-only (commit settings stay unchanged).")
+    console.print("SSH selection affects github.com across projects; commit identity changes only in the selected project.")
+    console.print("Existing commits, browser sessions, gh CLI logins and HTTPS credentials stay unchanged.")
+    console.print("Linux, Windows CMD and PowerShell use the same commands; no environment activation is needed after installation.")
+
+
+@app.command(rich_help_panel="Accounts")
 @guarded
 def add(
-    key_name: Annotated[str | None, typer.Option(help="New basename inside ~/.ssh.")] = None,
-    email: Annotated[
-        str, typer.Option("--email", "--comment", help="Optional public key comment.")
-    ] = "",
+    name: Annotated[
+        str | None, typer.Argument(metavar="NAME", help="Nickname to save, e.g. arsam, arvand or work.")
+    ] = None,
+    key: Annotated[
+        str | None, typer.Option("--key", help="Reuse an existing private key in ~/.ssh, e.g. id_ed25519.")
+    ] = None,
+    key_name: Annotated[
+        str | None, typer.Option(help="Filename for a NEW key; defaults to github_NAME. Never overwrites.")
+    ] = None,
+    git_name: Annotated[
+        str | None, typer.Option(help="Save the commit author name for this account.")
+    ] = None,
+    git_email: Annotated[
+        str | None, typer.Option("--git-email", "--email", help="Save a verified GitHub commit email (or noreply address).")
+    ] = None,
     github: GitHub = False,
     no_passphrase: Annotated[
-        bool, typer.Option(help="Explicitly generate an unencrypted private key.")
+        bool, typer.Option("--no-passphrase", help="Create a key with no passphrase (unencrypted); not used with --key.")
     ] = False,
     copy: Annotated[
         bool, typer.Option("--copy", help="Copy the public key to the clipboard.")
@@ -291,20 +344,76 @@ def add(
     yes: Yes = False,
     dry_run: DryRun = False,
 ) -> None:
-    """Generate, load and configure a new GitHub-specific Ed25519 key."""
-    create_key(
-        replace=False,
-        key_name=key_name,
-        email=email,
-        github=github,
-        no_passphrase=no_passphrase,
-        copy=copy,
-        yes=yes,
-        dry_run=dry_run,
+    """Save a named account. Run without options for guided setup.
+
+    Example: ghssh add arsam --key id_ed25519 (reuse your existing key).
+
+    Example: ghssh add arvand (create another key and save its commit details).
+
+    Setup does not change your active SSH or Git identity. After adding the public
+    key to the right GitHub account, run ghssh switch NAME from your Git project.
+    A passphrase is a password protecting your private key; OpenSSH asks for it.
+    """
+    manager = Manager()
+    accounts = AccountManager(manager)
+    interactive = not (yes or dry_run)
+    if name is None:
+        if not interactive:
+            raise GhsshError("Provide a nickname: ghssh add arsam --git-name NAME --git-email EMAIL.")
+        name = typer.prompt("Account nickname (for example arsam or arvand)")
+    name = account_name(name)
+    if name in accounts.read():
+        raise GhsshError(f"Account '{name}' already exists. Run ghssh switch {name}.")
+    if key is None and key_name is None and interactive:
+        detected = [item.private.name for item in manager.ssh.discover() if item.private]
+        if detected:
+            console.print("Existing SSH keys: " + ", ".join(detected))
+        console.print("Reuse your current key for an existing account, or create a separate key for a new account.")
+        key = typer.prompt(
+            "Existing private-key filename (press Enter to create a new key)", default="",
+            show_default=False,
+        ) or None
+    if key is not None and no_passphrase:
+        raise typer.BadParameter("--no-passphrase creates a new key; omit it when reusing --key.")
+    if git_name is None or git_email is None:
+        if not interactive:
+            raise GhsshError("Save both --git-name and --git-email, or omit --yes/--dry-run to use guided setup.")
+        console.print("GitHub uses your commit email to credit commits. Use an email verified on THIS account.")
+        git_name = git_name if git_name is not None else typer.prompt("Commit author name")
+        git_email = git_email if git_email is not None else typer.prompt("Verified GitHub commit email (or noreply address)")
+    plan = accounts.plan_add(name, git_name, git_email, key=key, key_name=key_name)
+    path = manager.ssh.key_path(plan.account.key)
+    if key is not None and (copy or github):
+        manager.ssh.public_text(path)
+    account = manager.github.require_account() if github else None
+    table(
+        "Dry run: add account" if dry_run else "Save GitHub account",
+        [
+            ("Nickname", name),
+            ("SSH key", str(path) + (" (create new pair)" if plan.create else " (reuse existing key)")),
+            ("Commit identity", f"{git_name} <{git_email}>"),
+            ("Saved profiles", str(manager.layout.accounts)),
+            ("Active SSH / Git / agent", "unchanged during setup"),
+            ("GitHub", f"Upload public key to {account}" if github else "Register the public key on this account if needed"),
+        ],
     )
+    if dry_run:
+        return
+    if plan.create and not no_passphrase and not sys.stdin.isatty():
+        raise GhsshError("Creating a key asks for a passphrase in a terminal; use a terminal or explicit --no-passphrase.")
+    confirm(f"Save account '{name}'?", yes)
+    accounts.add(
+        name, git_name, git_email, key=key, key_name=key_name,
+        no_passphrase=no_passphrase, expected=plan,
+    )
+    console.print(f"Saved account '{name}'.")
+    if plan.create or Path(str(path) + ".pub").exists():
+        publish(manager, path, github, copy, account, interactive_test=True)
+    console.print(f"Next, open your Git project and run: ghssh switch {name}")
+    console.print("Switching selects SSH authentication and future commit authorship together.")
 
 
-@app.command()
+@app.command(rich_help_panel="Key maintenance and recovery")
 @guarded
 def replace(
     key_name: Annotated[
@@ -313,7 +422,7 @@ def replace(
     email: Annotated[str, typer.Option("--email", "--comment")] = "",
     github: GitHub = False,
     no_passphrase: Annotated[
-        bool, typer.Option(help="Explicitly generate an unencrypted private key.")
+        bool, typer.Option("--no-passphrase", help="Explicitly generate an unencrypted private key.")
     ] = False,
     copy: Annotated[bool, typer.Option("--copy")] = False,
     yes: Yes = False,
@@ -332,26 +441,26 @@ def replace(
     )
 
 
-@app.command("switch")
+@app.command("switch", rich_help_panel="Accounts")
 @guarded
 def switch_account(
     key_name: Annotated[
-        str | None, typer.Argument(help="Alternate private-key basename inside ~/.ssh.")
+        str | None, typer.Argument(metavar="NAME", help="Saved account nickname, e.g. arsam or arvand.")
     ] = None,
     back: Annotated[
-        bool, typer.Option("--back", help="Return to the SSH configuration saved before switching.")
+        bool, typer.Option("--back", help="Restore a legacy temporary switch; named accounts do not need this.", rich_help_panel="Legacy temporary switches")
     ] = False,
     create: Annotated[
-        bool, typer.Option("--create", help="Generate a new key for the other account first.")
+        bool, typer.Option("--create", help="Legacy: create a temporary key. Prefer ghssh add NAME.", rich_help_panel="Legacy temporary switches")
     ] = False,
-    email: Annotated[str, typer.Option("--email", "--comment")] = "",
+    email: Annotated[str, typer.Option("--email", "--comment", help="Legacy new-key comment; requires --create.", rich_help_panel="Legacy temporary switches")] = "",
     git_name: Annotated[
         str | None,
-        typer.Option("--git-name", help="Commit author name for the selected repository."),
+        typer.Option("--git-name", help="Legacy temporary switch: commit author name.", rich_help_panel="Legacy temporary switches"),
     ] = None,
     git_email: Annotated[
         str | None,
-        typer.Option("--git-email", help="Commit email verified on the other GitHub account."),
+        typer.Option("--git-email", help="Legacy temporary switch: verified commit email.", rich_help_panel="Legacy temporary switches"),
     ] = None,
     repository: Annotated[
         Path | None,
@@ -361,16 +470,34 @@ def switch_account(
         bool, typer.Option("--ssh-only", help="Switch SSH without changing commit author settings.")
     ] = False,
     no_passphrase: Annotated[
-        bool, typer.Option(help="Explicitly generate an unencrypted private key.")
+        bool, typer.Option("--no-passphrase", help="Legacy --create: generate an unencrypted key.", rich_help_panel="Legacy temporary switches")
     ] = False,
     copy: Annotated[
-        bool, typer.Option("--copy", help="Copy the newly created public key.")
+        bool, typer.Option("--copy", help="Legacy --create: copy the public key.", rich_help_panel="Legacy temporary switches")
     ] = False,
     yes: Yes = False,
     dry_run: DryRun = False,
 ) -> None:
-    """Switch SSH and repository commit identity; --back restores both."""
+    """Select a saved SSH key and author name/email for future commits in this project.
+
+    Examples: ghssh switch arsam; ghssh switch arvand; ghssh switch work.
+
+    Add accounts once with ghssh add NAME. Switch directly between any number of
+    saved accounts; no --back or repeated commit details are needed. --dry-run
+    previews changes. --repo PATH selects another project. Outside a Git project,
+    use --ssh-only to leave commit settings alone.
+
+    SSH selection applies to github.com connections from all repositories; commit
+    settings apply only to the selected project. Use an SSH Git remote. Browser,
+    HTTPS credentials and gh CLI logins are separate. Existing commits stay intact.
+    """
     manager = Manager()
+    accounts = AccountManager(manager)
+    if key_name and not back and key_name.lower() in accounts.read():
+        if create or email or no_passphrase or copy or git_name is not None or git_email is not None:
+            raise typer.BadParameter("This is a saved account. Use ghssh switch NAME; its key and commit details are already saved.")
+        switch_named(accounts, key_name, repository=repository, ssh_only=ssh_only, dry_run=dry_run)
+        return
     switcher = SwitchManager(manager)
     if back:
         if (
@@ -415,7 +542,10 @@ def switch_account(
             )
         return
     if not key_name:
-        raise typer.BadParameter("Provide a key name, or use ghssh switch --back.")
+        raise typer.BadParameter("Choose a saved name: ghssh switch arsam. See ghssh accounts; add one with ghssh add NAME.")
+    # Old key-basename commands remain available for existing scripts and return points.
+    if not manager.ssh.key_path(key_name).exists() and not create:
+        raise GhsshError(f"No saved account named '{key_name}'. Run ghssh accounts or ghssh add {key_name}.")
     if not create and (email or no_passphrase or copy):
         raise typer.BadParameter("--email, --no-passphrase and --copy require --create.")
     if any(char in email for char in ("\n", "\r", "\x00")):
@@ -522,7 +652,85 @@ def switch_account(
     console.print("This selects Git SSH authentication; browser and gh CLI logins are separate.")
 
 
-@app.command()
+def switch_named(
+    accounts: AccountManager, name: str, *, repository: Path | None,
+    ssh_only: bool, dry_run: bool,
+) -> None:
+    plan = accounts.plan_switch(name, repository=repository, ssh_only=ssh_only)
+    table(
+        "Dry run: switch account" if dry_run else "Switch GitHub account",
+        [
+            ("Account", plan.name),
+            ("SSH key", str(accounts.manager.ssh.key_path(plan.account.key))),
+            ("Commit identity", f"{plan.account.git_name} <{plan.account.git_email}>" if plan.git else "unchanged (--ssh-only)"),
+            ("Git project", str(plan.git.identity.repository) if plan.git else "none (--ssh-only)"),
+            ("SSH scope", "github.com connections from all projects using this SSH config"),
+            ("Safety backup", str(accounts.layout.backups)),
+        ],
+    )
+    if dry_run:
+        return
+    change = accounts.switch(name, repository=repository, ssh_only=ssh_only, expected=plan)
+    console.print(f"Switched to '{plan.name}'.")
+    if plan.git:
+        console.print(f"Future commits in {plan.git.identity.repository}: {plan.account.git_name} <{plan.account.git_email}>.")
+    console.print(f"Safety backup: {change.backup}")
+    console.print("Check the GitHub username: ssh -T git@github.com")
+    console.print("Choose another saved account anytime: ghssh switch NAME (see ghssh accounts).")
+
+
+@app.command(rich_help_panel="Accounts")
+@guarded
+def accounts() -> None:
+    """Show saved account nicknames, SSH keys and commit details. Marks the selected SSH key."""
+    manager = Manager()
+    saved = AccountManager(manager).read()
+    if not saved:
+        console.print("No saved accounts yet. Start with: ghssh add arsam")
+        console.print("Reuse your existing key during setup, then add your other accounts the same way.")
+        return
+    config = manager.config.read()
+    config.validate_edit()
+    current = config.identity(manager.layout)
+    result = Table(title="Saved GitHub accounts")
+    for column in ("Name", "SSH selection", "Key", "Commit name", "Commit email"):
+        result.add_column(column)
+    for name, account in sorted(saved.items()):
+        result.add_row(*map(Text, (
+            name, "selected" if manager.ssh.key_path(account.key) == current else "",
+            account.key, account.git_name, account.git_email,
+        )))
+    console.print(result)
+    console.print("From your Git project: ghssh switch NAME")
+    console.print("The selection column shows SSH only. Check this project's commit settings with ghssh status.")
+
+
+@app.command(rich_help_panel="Accounts")
+@guarded
+def forget(
+    name: Annotated[str, typer.Argument(metavar="NAME", help="Saved nickname to forget.")],
+    yes: Yes = False, dry_run: DryRun = False,
+) -> None:
+    """Forget a saved nickname. Keeps its SSH keys, current SSH/Git settings and backups.
+
+    To correct saved commit details: ghssh forget NAME, then ghssh add NAME --key
+    EXISTING_KEY and enter the corrected name/email. No key recreation is needed.
+    """
+    manager = Manager()
+    profiles = AccountManager(manager)
+    name = account_name(name)
+    saved = profiles.read()
+    if name not in saved:
+        raise GhsshError(f"No saved account named '{name}'. Run ghssh accounts.")
+    console.print(f"Forget '{name}'; keep its SSH key, active SSH/Git settings and backups.")
+    if dry_run:
+        return
+    confirm("Forget this nickname?", yes)
+    profiles.forget(name, expected=saved[name])
+    console.print(f"Forgot '{name}'. Key files were retained.")
+
+
+@app.command(rich_help_panel="Key maintenance and recovery")
 @guarded
 def remove(
     config_only: Annotated[
@@ -532,7 +740,7 @@ def remove(
         bool, typer.Option(help="Also delete a fingerprint-verified ghssh-owned key pair.")
     ] = False,
     no_backup: Annotated[
-        bool, typer.Option(help="Explicitly skip the pre-removal backup.")
+        bool, typer.Option("--no-backup", help="Explicitly skip the pre-removal backup.")
     ] = False,
     github: GitHub = False,
     yes: Yes = False,
@@ -614,7 +822,7 @@ def remove(
             ) from exc
 
 
-@app.command("list")
+@app.command("list", rich_help_panel="Inspect and check")
 @guarded
 def list_keys() -> None:
     """List detected key pairs, their fingerprints, configuration roles and agent state."""
@@ -658,7 +866,7 @@ def list_keys() -> None:
     console.print("Loaded identities: " + (", ".join(sorted(loaded)) or "none"))
 
 
-@app.command()
+@app.command(rich_help_panel="Inspect and check")
 @guarded
 def status(
     repository: Annotated[
@@ -690,9 +898,14 @@ def status(
     except GhsshError as exc:
         authenticated = False
         console.print(f"GitHub authentication could not be checked: {exc}")
+    saved = AccountManager(manager).read()
+    selected_names = [name for name, account in saved.items() if manager.ssh.key_path(account.key) == key]
+    if any(saved[name].fingerprint != fingerprint for name in selected_names):
+        issue = "Selected key no longer matches its saved account fingerprint"
     table(
         "GitHub SSH Status",
         [
+            ("Saved account", ", ".join(selected_names) or "none selected; see ghssh accounts"),
             (
                 "SSH directory",
                 f"{'✓' if manager.layout.ssh.is_dir() else '✗'} {manager.layout.ssh}",
@@ -741,7 +954,7 @@ def status(
         console.print(f"Commit identity: {exc}")
 
 
-@app.command("test")
+@app.command("test", rich_help_panel="Inspect and check")
 @guarded
 def test_connection() -> None:
     """Test GitHub authentication; its successful no-shell response usually exits 1."""
@@ -757,7 +970,7 @@ def test_connection() -> None:
         raise typer.Exit(1)
 
 
-@app.command()
+@app.command(rich_help_panel="Key maintenance and recovery")
 @guarded
 def backup(dry_run: DryRun = False) -> None:
     """Snapshot the current GitHub key pair, config, and metadata in a private directory."""
@@ -784,7 +997,7 @@ def backup(dry_run: DryRun = False) -> None:
     console.print(f"Backup created: {directory}")
 
 
-@app.command()
+@app.command(rich_help_panel="Key maintenance and recovery")
 @guarded
 def restore(
     backup_id: Annotated[

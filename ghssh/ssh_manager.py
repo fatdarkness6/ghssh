@@ -28,6 +28,7 @@ RESERVED = {
     "rc",
     "ghssh-state.json",
     "ghssh-switch.json",
+    "ghssh-accounts.json",
 }
 
 

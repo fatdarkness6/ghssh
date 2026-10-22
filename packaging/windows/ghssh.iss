@@ -33,7 +33,7 @@ Name: "addtopath"; Description: "Add ghssh to my user PATH (recommended)"; Flags
 Source: "..\..\dist\ghssh\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Messages]
-FinishedLabel=ghssh is installed. Open a NEW CMD or PowerShell window and run ghssh --help.%n%nGit for Windows and Windows OpenSSH Client must be installed. Your SSH keys and backups are kept in your user profile and are preserved when uninstalling.
+FinishedLabel=ghssh is installed. Open a NEW CMD or PowerShell window and run ghssh guide.%n%nSave accounts with ghssh add NAME, then switch from your Git project with ghssh switch NAME.%n%nGit for Windows and Windows OpenSSH Client must be installed. Your SSH keys, saved accounts and backups are preserved when uninstalling.
 
 [Code]
 const

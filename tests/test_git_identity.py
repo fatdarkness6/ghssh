@@ -9,6 +9,7 @@ from conftest import FakeRunner, public_key
 from typer.testing import CliRunner
 
 from ghssh import cli
+from ghssh.account_manager import AccountManager
 from ghssh.git_manager import GitIdentity
 from ghssh.manager import Manager
 from ghssh.switch_manager import SwitchManager
@@ -21,6 +22,77 @@ class GitAndSSHRunner(FakeRunner):
             self.calls.append((list(args), kwargs))
             return Runner().run(args, **kwargs)
         return super().run(args, **kwargs)
+
+
+def test_named_switches_keep_commits_in_sync_across_three_accounts(git_setup, monkeypatch):
+    manager, repository, global_config = git_setup
+    monkeypatch.setattr(cli, "Manager", lambda: manager)
+    accounts = AccountManager(manager)
+    accounts.add("arsam", "Arsam", "arsam@example.com", key="github_original")
+    accounts.add("arvand", "Arvand", "arvand@example.com", key="github_second")
+    accounts.add("work", "Work", "work@example.com", no_passphrase=True)
+    before_global = global_config.read_bytes()
+    before_agent = manager.runner.loaded.copy()
+    local(repository, "core.editor", "code --wait")
+    runner = CliRunner()
+    for name in ("arvand", "work", "arsam", "work", "work"):
+        result = runner.invoke(cli.app, ["switch", name, "--repo", str(repository)])
+        assert result.exit_code == 0, result.output
+        assert f"Switched to '{name}'" in result.output
+        assert manager.git.effective(repository, "user.email") == f"{name}@example.com"
+        assert manager.config.read().identity(manager.layout).name == accounts.read()[name].key
+        assert not manager.layout.switch_state.exists()
+        Runner().run(["git", "-C", str(repository), "commit", "--quiet", "--allow-empty", "-m", name])
+        email = Runner().run(["git", "-C", str(repository), "log", "-1", "--format=%ae"]).stdout.strip()
+        assert email == f"{name}@example.com"
+    assert manager.git.effective(repository, "core.editor") == "code --wait"
+    assert global_config.read_bytes() == before_global
+    assert manager.runner.loaded == before_agent
+
+
+def test_named_switch_rolls_back_ssh_and_git_if_verification_fails(git_setup, monkeypatch):
+    manager, repository, _ = git_setup
+    accounts = AccountManager(manager)
+    accounts.add("arvand", "Arvand", "arvand@example.com", key="github_second")
+    before_ssh = manager.layout.config.read_bytes()
+    before_git = (repository / ".git/config").read_bytes()
+    def fail(identity):
+        raise GhsshError("injected identity failure")
+    monkeypatch.setattr(manager.git, "verify_effective", fail)
+    with pytest.raises(GhsshError, match="identity failure"):
+        accounts.switch("arvand", repository=repository)
+    assert manager.layout.config.read_bytes() == before_ssh
+    assert (repository / ".git/config").read_bytes() == before_git
+    assert not (repository / ".git/config.lock").exists()
+
+
+def test_named_switch_dry_run_and_stale_plan_are_safe(git_setup, monkeypatch):
+    manager, repository, _ = git_setup
+    accounts = AccountManager(manager)
+    accounts.add("arvand", "Arvand", "arvand@example.com", key="github_second")
+    monkeypatch.setattr(cli, "Manager", lambda: manager)
+    before_ssh = manager.layout.config.read_bytes()
+    before_git = (repository / ".git/config").read_bytes()
+    before_accounts = manager.layout.accounts.read_bytes()
+    result = CliRunner().invoke(cli.app, ["switch", "arvand", "--repo", str(repository), "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert manager.layout.config.read_bytes() == before_ssh
+    assert (repository / ".git/config").read_bytes() == before_git
+    assert manager.layout.accounts.read_bytes() == before_accounts
+    plan = accounts.plan_switch("arvand", repository=repository)
+    local(repository, "core.editor", "changed externally")
+    with pytest.raises(GhsshError, match="changed since"):
+        accounts.switch("arvand", repository=repository, expected=plan)
+    assert manager.layout.config.read_bytes() == before_ssh
+
+
+def test_named_switch_outside_repository_gives_clear_next_step(git_setup):
+    manager, _, _ = git_setup
+    accounts = AccountManager(manager)
+    add = accounts.add("arsam", "Arsam", "arsam@example.com", no_passphrase=True)
+    with pytest.raises(GhsshError, match="--repo PATH or --ssh-only"):
+        accounts.switch("arsam", repository=manager.layout.home)
+    assert add.key == "github_arsam"
 
 
 @pytest.fixture
