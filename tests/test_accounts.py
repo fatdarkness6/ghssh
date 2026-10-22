@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from conftest import assert_permissions, public_key
+from rich.text import Text
 from typer.testing import CliRunner
 
 from ghssh import cli
@@ -220,14 +221,15 @@ def test_shared_addkeystoagent_setting_refused(manager):
         accounts.switch("arsam", ssh_only=True)
 
 
-def test_help_explains_setup_switch_and_scope():
+@pytest.mark.parametrize("force_color", ["0", "1"])
+def test_help_explains_setup_switch_and_scope(force_color):
     for args, phrases in [
         (["--help"], ["ghssh add arsam", "ghssh accounts", "ghssh guide"]),
         (["add", "--help"], ["existing key", "commit", "passphrase"]),
         (["switch", "--help"], ["any number", "--repo", "--ssh-only", "future commits"]),
     ]:
-        result = runner.invoke(cli.app, args, terminal_width=110)
+        result = runner.invoke(cli.app, args, terminal_width=110, env={"FORCE_COLOR": force_color})
         assert result.exit_code == 0, result.output
-        text = " ".join(result.output.split())
+        text = " ".join(Text.from_ansi(result.output).plain.split())
         for phrase in phrases:
             assert phrase in text
